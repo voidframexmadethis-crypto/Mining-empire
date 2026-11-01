@@ -1,0 +1,6 @@
+{
+  "name": "Mining Empire",
+  "description": "Build your mining empire in this immersive 3D tycoon game with automated factories and deep-earth exploration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
