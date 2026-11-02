@@ -12,6 +12,7 @@ type Upgrades = {
   speed: number;
   backpack: number;
   elevatorSpeed: number;
+  headlampOptics?: number;
   scanner: boolean;
 };
 
@@ -26,6 +27,10 @@ type MiningHUDProps = {
   elevatorSpeed: number;
   remainingCaveGems: number;
   upgrades: Upgrades;
+  headlampOn: boolean;
+  headlampPower: number;
+  onToggleHeadlamp: () => void;
+  onCycleHeadlampPower: () => void;
   onUpgrade: (type: keyof Upgrades) => void;
   onSellGems: () => void;
   onSellJewelry: (productId: string) => void;
@@ -41,6 +46,8 @@ type MiningHUDProps = {
   factoryNotification: string | null;
   onOpenOffice: () => void;
   onOpenEncyclopedia: () => void;
+  onOpenStatistics: () => void;
+  onOpenSettings: () => void;
   nearOffice: boolean;
   achievementToast: { title: string; description: string; rewardCash: number; icon: string } | null;
 };
@@ -56,6 +63,10 @@ export default function MiningHUD({
   elevatorSpeed,
   remainingCaveGems,
   upgrades,
+  headlampOn,
+  headlampPower,
+  onToggleHeadlamp,
+  onCycleHeadlampPower,
   onUpgrade,
   onSellGems,
   onSellJewelry,
@@ -71,6 +82,8 @@ export default function MiningHUD({
   factoryNotification,
   onOpenOffice,
   onOpenEncyclopedia,
+  onOpenStatistics,
+  onOpenSettings,
   nearOffice,
   achievementToast
 }: MiningHUDProps) {
@@ -152,8 +165,15 @@ export default function MiningHUD({
     speed: Math.floor(150 * Math.pow(1.6, Math.round((upgrades.speed - 1) * 10))),
     backpack: Math.floor(120 * Math.pow(1.4, Math.floor(backpackCapacity / 10))),
     elevatorSpeed: Math.floor(250 * Math.pow(1.5, Math.round((upgrades.elevatorSpeed - 35) / 5))),
+    headlampOptics: Math.floor(200 * Math.pow(1.5, Math.round(((upgrades.headlampOptics || 1.0) - 1) * 2))),
     scanner: 1000
   };
+
+  const formattedRemainingGems = remainingCaveGems >= 1e12 
+    ? `${(remainingCaveGems / 1e12).toFixed(1)}T GEMS`
+    : remainingCaveGems >= 1e6
+    ? `${(remainingCaveGems / 1e6).toFixed(0)}M GEMS`
+    : `${remainingCaveGems.toLocaleString()} GEMS`;
 
   return (
     <div className="fixed inset-0 pointer-events-none z-40 flex flex-col justify-between p-3 md:p-6 font-sans">
@@ -172,7 +192,7 @@ export default function MiningHUD({
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1">
               <span>Deep Gem Mine & Jewelry Empire</span>
               <span className="text-slate-600">·</span>
-              <span className="text-emerald-400 font-mono">185M GEMS</span>
+              <span className="text-emerald-400 font-mono">{formattedRemainingGems}</span>
             </div>
             <div className="text-xs md:text-sm font-bold text-slate-100 flex items-center gap-2">
               <span>{location}</span>
@@ -257,6 +277,20 @@ export default function MiningHUD({
               </button>
 
               <button
+                onClick={onOpenStatistics}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-sm border border-emerald-400/50"
+              >
+                📊 Stats
+              </button>
+
+              <button
+                onClick={onOpenSettings}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-sm"
+              >
+                ⚙️ Settings
+              </button>
+
+              <button
                 onClick={() => setActiveTab(activeTab === "achievements" ? "none" : "achievements")}
                 className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                   activeTab === "achievements"
@@ -289,6 +323,29 @@ export default function MiningHUD({
               >
                 <span>{musicActive ? "🎵 Music: ON" : "🔈 Music: OFF"}</span>
               </button>
+
+              {/* 400-Meter Headlamp LED Controls */}
+              <button
+                onClick={onToggleHeadlamp}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                  headlampOn
+                    ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700"
+                }`}
+                title="Toggle 400m LED Helmet Headlamp (Key: F)"
+              >
+                🔦 {headlampOn ? "Lamp: ON" : "Lamp: OFF"}
+              </button>
+
+              {headlampOn && (
+                <button
+                  onClick={onCycleHeadlampPower}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 shadow-sm"
+                  title="Cycle 400m Headlamp Beam Intensity (100% / 150% / 200% / 250%)"
+                >
+                  💡 Beam: {Math.round(headlampPower * 100)}%
+                </button>
+              )}
             </>
           )}
 
@@ -652,6 +709,24 @@ export default function MiningHUD({
                     }`}
                   >
                     +5 m/s (${upgradeCosts.elevatorSpeed})
+                  </button>
+                </div>
+
+                <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700/60 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-100">🔦 Headlamp LED Beam Optics</div>
+                    <div className="text-xs text-slate-400">Range: {Math.round(400 * (upgrades.headlampOptics || 1.0))}m 400m Beam</div>
+                  </div>
+                  <button
+                    onClick={() => onUpgrade("headlampOptics")}
+                    disabled={cash < upgradeCosts.headlampOptics}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all ${
+                      cash >= upgradeCosts.headlampOptics
+                        ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950"
+                        : "bg-slate-700 text-slate-500 cursor-not-allowed"
+                    }`}
+                  >
+                    +100m Beam (${upgradeCosts.headlampOptics})
                   </button>
                 </div>
               </div>
