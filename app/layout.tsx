@@ -2,17 +2,17 @@ import type {Metadata} from 'next';
 import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'Mining Empire | 3D Tycoon Game',
-  description: 'Build your mining empire in this immersive 3D tycoon game with automated factories and deep-earth exploration.',
+  title: 'Deep Gem Mine 3D',
+  description: 'Hyper-speed elevator deep mining simulator with crystal drill, voxel ore deposits, and gem factory.',
   openGraph: {
-    title: 'Mining Empire | 3D Tycoon Game',
-    description: 'Build your mining empire in this immersive 3D tycoon game with automated factories and deep-earth exploration.',
+    title: 'Deep Gem Mine 3D',
+    description: 'Hyper-speed elevator deep mining simulator with crystal drill, voxel ore deposits, and gem factory.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Mining Empire | 3D Tycoon Game',
-    description: 'Build your mining empire in this immersive 3D tycoon game with automated factories and deep-earth exploration.',
+    title: 'Deep Gem Mine 3D',
+    description: 'Hyper-speed elevator deep mining simulator with crystal drill, voxel ore deposits, and gem factory.',
   },
 };
 

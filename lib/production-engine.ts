@@ -30,6 +30,8 @@ export type ProductionAPI = {
   mineDeposit(deposit: CaveDeposit, power?: number): boolean;
   collectNearby(position: THREE.Vector3): number;
   deliverGems(): number;
+  pickupFinishedGems(): number;
+  sellBackpackFinishedGems(): { count: number; earnings: number };
   
   // Production Stages
   processAtDriller(): boolean;
@@ -38,7 +40,7 @@ export type ProductionAPI = {
   processAtCompactor(): boolean;
   processAtJam(): boolean;
   processAtAnalyzer(): boolean;
-  processAtPendantMachine(shape: "pendant" | "bead"): boolean;
+  processAtPendantMachine(shape?: "pendant" | "bead"): boolean;
   polishGems(): boolean;
 
   update(delta: number): void;
@@ -94,6 +96,7 @@ export function createGemstoneProduction(
   let analyzed = 0;
   let shaped = 0;
   let polished = 0;
+  let autoProcessTimer = 0;
 
   const gemColors: Record<GemKind, number> = {
     ruby: 0xd9273d,
@@ -221,19 +224,18 @@ export function createGemstoneProduction(
     mesh.receiveShadow = true;
     root.add(mesh);
 
-    // Gem mineral dots embedded in the rock.
+    // Dense, tightly compacted gem crystals embedded inside the rock matrix.
     const kind: GemKind = (
       ["ruby", "sapphire", "emerald", "diamond"] as GemKind[]
     )[Math.floor(Math.random() * 4)];
 
-    const dotCount = bonus ? 7 : 16;
+    const crystalCount = bonus ? 12 : 24;
 
-    for (let i = 0; i < dotCount; i++) {
-      const dot = new THREE.Mesh(
-        new THREE.SphereGeometry(
-          bonus ? 0.045 : 0.07,
-          8,
-          8
+    for (let i = 0; i < crystalCount; i++) {
+      const crystal = new THREE.Mesh(
+        new THREE.OctahedronGeometry(
+          bonus ? 0.12 : 0.22,
+          0
         ),
         gemMaterials[kind]
       );
@@ -244,11 +246,13 @@ export function createGemstoneProduction(
         Math.random() - 0.5
       ).normalize();
 
-      dot.position.copy(
-        direction.multiplyScalar(size * 0.94)
+      // Compacted tightly together inside and protruding slightly from the stone face
+      crystal.position.copy(
+        direction.multiplyScalar(size * 0.75 + Math.random() * 0.25)
       );
+      crystal.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
 
-      mesh.add(dot);
+      mesh.add(crystal);
     }
 
     const deposit: CaveDeposit = {
@@ -322,7 +326,7 @@ export function createGemstoneProduction(
   }
 
   // ------------------------------------------------
-  // BACKPACK & DELIVERY
+  // BACKPACK & DELIVERY & PICKUP
   // ------------------------------------------------
 
   function collectNearby(position: THREE.Vector3): number {
@@ -381,8 +385,47 @@ export function createGemstoneProduction(
     return count;
   }
 
+  function pickupFinishedGems(): number {
+    if (finishedGems.length === 0) return 0;
+
+    let pickedUp = 0;
+    while (finishedGems.length > 0 && backpack.length < capacity) {
+      const gem = finishedGems.shift()!;
+      backpack.push(gem);
+      pickedUp++;
+    }
+
+    if (pickedUp > 0) {
+      playSound(880, 0.2, 0.15, "sine");
+      options.onInventoryChanged?.([...backpack]);
+    }
+
+    return pickedUp;
+  }
+
+  function sellBackpackFinishedGems(): { count: number; earnings: number } {
+    let count = 0;
+    let earnings = 0;
+
+    for (let i = backpack.length - 1; i >= 0; i--) {
+      const gem = backpack[i];
+      if (gem.stage === 8 || gem.value > 10) {
+        earnings += gem.value;
+        count++;
+        backpack.splice(i, 1);
+      }
+    }
+
+    if (count > 0) {
+      playSound(1200, 0.3, 0.25, "triangle");
+      options.onInventoryChanged?.([...backpack]);
+    }
+
+    return { count, earnings };
+  }
+
   // ------------------------------------------------
-  // FACTORY MACHINE MODELS
+  // FACTORY MACHINE MODELS & STATIONS
   // ------------------------------------------------
 
   const activeLights: THREE.PointLight[] = [];
@@ -435,7 +478,7 @@ export function createGemstoneProduction(
     lightBulb.position.set(0, 2.8, 1.35);
     group.add(lightBulb);
 
-    // Small display window.
+    // Display window
     const windowMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.85, 0.55, 0.08),
       new THREE.MeshPhysicalMaterial({
@@ -450,7 +493,7 @@ export function createGemstoneProduction(
     windowMesh.position.set(0, 1.4, 1.34);
     group.add(windowMesh);
 
-    // Machine sign.
+    // Machine sign
     const canvas = document.createElement("canvas");
     canvas.width = 512;
     canvas.height = 128;
@@ -519,9 +562,41 @@ export function createGemstoneProduction(
     drillerData, crusherData, washerData, compactorData, jamData, analyzerData, pendantData, polisherData
   ];
 
+  // Output / Pickup Station
+  const pickupGroup = new THREE.Group();
+  pickupGroup.position.set(startX + 7 * machineSpacing + 5, 0, 2.5);
+  factoryGroup.add(pickupGroup);
+
+  const pickupBin = new THREE.Mesh(
+    new THREE.BoxGeometry(3.5, 0.9, 3.5),
+    new THREE.MeshStandardMaterial({ color: 0x15803d, metalness: 0.6, roughness: 0.4 })
+  );
+  pickupBin.position.y = 0.45;
+  pickupGroup.add(pickupBin);
+
+  const pickupSignCanvas = document.createElement("canvas");
+  pickupSignCanvas.width = 256;
+  pickupSignCanvas.height = 128;
+  const pctx = pickupSignCanvas.getContext("2d");
+  if (pctx) {
+    pctx.fillStyle = "#22c55e";
+    pctx.fillRect(0, 0, 256, 128);
+    pctx.fillStyle = "white";
+    pctx.font = "bold 34px Arial";
+    pctx.textAlign = "center";
+    pctx.fillText("PICKUP", 128, 55);
+    pctx.fillText("STATION", 128, 95);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3, 1.5),
+      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(pickupSignCanvas) })
+    );
+    sign.position.set(0, 3.5, 0);
+    pickupGroup.add(sign);
+  }
+
   // Seller Station
   const sellerGroup = new THREE.Group();
-  sellerGroup.position.set(startX + 8 * machineSpacing + 2, 0, -2);
+  sellerGroup.position.set(startX + 7 * machineSpacing + 12, 0, -2);
   factoryGroup.add(sellerGroup);
 
   const counter = new THREE.Mesh(
@@ -536,9 +611,9 @@ export function createGemstoneProduction(
   sellerSignCanvas.height = 128;
   const sctx = sellerSignCanvas.getContext("2d");
   if (sctx) {
-    sctx.fillStyle = "#22c55e";
+    sctx.fillStyle = "#eab308";
     sctx.fillRect(0, 0, 256, 128);
-    sctx.fillStyle = "white";
+    sctx.fillStyle = "black";
     sctx.font = "bold 40px Arial";
     sctx.textAlign = "center";
     sctx.fillText("SELL GEMS", 128, 80);
@@ -620,7 +695,7 @@ export function createGemstoneProduction(
     else if (nextStage === 8) {
       polished++;
       finishedGems.push({ ...gem });
-      // Remove from storage if fully polished
+      // Remove from active factory storage when it lands in the pickup bin
       const idx = factoryStorage.indexOf(gem);
       if (idx !== -1) factoryStorage.splice(idx, 1);
     }
@@ -628,14 +703,14 @@ export function createGemstoneProduction(
     return true;
   }
 
-  function processAtDriller() { return processStage(0, 1, drillerData, 0xffffff, 1.2); }
-  function processAtCrusher() { return processStage(1, 2, crusherData, 0xaaaaaa, 1.2); }
-  function processAtWasher() { return processStage(2, 3, washerData, 0x00aaff, 1.2); }
-  function processAtCompactor() { return processStage(3, 4, compactorData, 0x555555, 1.2); }
-  function processAtJam() { return processStage(4, 5, jamData, 0xff0044, 1.2); }
+  function processAtDriller() { return processStage(0, 1, drillerData, 0xffffff, 1.3); }
+  function processAtCrusher() { return processStage(1, 2, crusherData, 0xaaaaaa, 1.3); }
+  function processAtWasher() { return processStage(2, 3, washerData, 0x00aaff, 1.3); }
+  function processAtCompactor() { return processStage(3, 4, compactorData, 0x555555, 1.3); }
+  function processAtJam() { return processStage(4, 5, jamData, 0xff0044, 1.3); }
   function processAtAnalyzer() { return processStage(5, 6, analyzerData, 0x00ffff, 1.5); }
   
-  function processAtPendantMachine(shape: "pendant" | "bead"): boolean {
+  function processAtPendantMachine(shape: "pendant" | "bead" = "pendant"): boolean {
     const gem = factoryStorage.find(g => g.stage === 6);
     if (!gem) return false;
     gem.stage = 7;
@@ -660,6 +735,7 @@ export function createGemstoneProduction(
   function update(delta: number) {
     const dt = Math.min(delta, 0.05);
 
+    // Cave Deposit regeneration
     for (const deposit of deposits) {
       if (deposit.active) continue;
       deposit.timer -= dt;
@@ -669,6 +745,28 @@ export function createGemstoneProduction(
         deposit.mesh.visible = true;
         deposit.mesh.scale.setScalar(1);
         deposit.mesh.material = stoneMaterial;
+      }
+    }
+
+    // Automated Factory Conveyor Pipeline Tick (Every 0.6s)
+    autoProcessTimer += dt;
+    if (autoProcessTimer >= 0.65) {
+      autoProcessTimer = 0;
+      // Step items down the pipeline sequentially from end to start
+      if (!polishGems()) {
+        if (!processAtPendantMachine("pendant")) {
+          if (!processAtAnalyzer()) {
+            if (!processAtJam()) {
+              if (!processAtCompactor()) {
+                if (!processAtWasher()) {
+                  if (!processAtCrusher()) {
+                    processAtDriller();
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
 
@@ -714,6 +812,8 @@ export function createGemstoneProduction(
     mineDeposit,
     collectNearby,
     deliverGems,
+    pickupFinishedGems,
+    sellBackpackFinishedGems,
     processAtDriller,
     processAtCrusher,
     processAtWasher,
@@ -742,4 +842,5 @@ export function createGemstoneProduction(
     dispose
   };
 }
+
 

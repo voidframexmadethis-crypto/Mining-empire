@@ -2,617 +2,1081 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
-import { motion, AnimatePresence } from "motion/react";
-import UpgradeMenu from "@/components/UpgradeMenu";
-import { createUpgradeTents, UpgradeAPI, UpgradeStats } from "@/lib/upgrade-tents";
-import { createMiningDrillEffects } from "@/lib/drill-effects";
-import { createGemstoneProduction, ProductionAPI, GemItem, CaveDeposit } from "@/lib/production-engine";
-import { ElevatorController, ElevatorFloor } from "@/lib/elevator-controller";
+import { AnimatePresence } from "motion/react";
+import MiningHUD from "@/components/MiningHUD";
+import ManagementModal from "@/components/ManagementModal";
+import EncyclopediaModal from "@/components/EncyclopediaModal";
+import { createSurfaceFactory } from "@/lib/factory-engine";
+import { createJewelryFactory } from "@/lib/jewelry-factory";
+import { GAME_GEMS, GemOreDeposit, GemDrillController, GemType } from "@/lib/gems";
+import { soundManager } from "@/lib/audio";
+import { buildMiningWorld } from "@/lib/cave-builder";
+import { managementSystem } from "@/lib/management-system";
+import { achievementsSystem } from "@/lib/achievements-system";
+import { gemEncyclopediaSystem, GemstoneEntry } from "@/lib/encyclopedia-system";
+import { createWorkerRenderer, WorkerRenderer } from "@/lib/worker-render-engine";
+import { createManagementOfficeBuilding, ManagementOfficeBuilding } from "@/lib/management-office-building";
 
-export default function App() {
+type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
+
+export default function DeepMiningApp() {
   const mountRef = useRef<HTMLDivElement>(null);
-  const [cash, setCash] = useState(1000);
-  const [inventory, setInventory] = useState<GemItem[]>([]);
-  const [message, setMessage] = useState("Explore the mine");
-  const [location, setLocation] = useState("Underground");
-  const [nearbyTent, setNearbyTent] = useState<string | null>(null);
-  const [showUpgradeMenu, setShowUpgradeMenu] = useState(false);
-  const [upgradeStats, setUpgradeStats] = useState<UpgradeStats | null>({
-    cash: 1000,
-    playerCapacity: 9,
-    backpackCapacity: 12,
-    drillPower: 1,
-    drillSpeed: 1,
-    playerSpeed: 1,
-    workerCount: 0,
-    workerSpeed: 1,
-    workerCapacity: 5,
-    workerHandCapacity: 3
-  });
-  const [factoryStats, setFactoryStats] = useState({
-    mined: 0,
-    delivered: 0,
-    drilled: 0,
-    crushed: 0,
-    washed: 0,
-    compacted: 0,
-    jammed: 0,
-    analyzed: 0,
-    shaped: 0,
-    polished: 0,
-    finishedCount: 0
-  });
-  const [elevatorStatus, setElevatorStatus] = useState("READY");
 
-  const cashRef = useRef(0);
-  const nearbyTentRef = useRef<string | null>(null);
-  const productionRef = useRef<ProductionAPI | null>(null);
+  // Game Economy & 185 Million Gems System
+  const INITIAL_CAVE_GEMS = 185000000;
+  const STARTING_BACKPACK_CAPACITY = 13;
+
+  const [cash, setCash] = useState(100);
+  const [inventory, setInventory] = useState<Record<string, number>>({});
+  const [jewelryInventory, setJewelryInventory] = useState<Record<string, number>>({});
+  const [backpackCapacity, setBackpackCapacity] = useState(STARTING_BACKPACK_CAPACITY);
+  const [location, setLocation] = useState("Underground Cave Mine");
+  const [depthFeet, setDepthFeet] = useState(100);
+  const [remainingCaveGems, setRemainingCaveGems] = useState(INITIAL_CAVE_GEMS);
+  const [showFactory, setShowFactory] = useState(false);
+  const [nearJewelryShop, setNearJewelryShop] = useState(false);
+  const [factoryNotification, setFactoryNotification] = useState<string | null>(null);
+
+  // Management, Workers, Encyclopedia & Achievements State
+  const [isOfficeOpen, setIsOfficeOpen] = useState(false);
+  const [isEncyclopediaOpen, setIsEncyclopediaOpen] = useState(false);
+  const [featuredDiscoveredGem, setFeaturedDiscoveredGem] = useState<GemstoneEntry | null>(null);
+  const [nearOffice, setNearOffice] = useState(false);
+  const [achievementToast, setAchievementToast] = useState<{
+    title: string;
+    description: string;
+    rewardCash: number;
+    icon: string;
+  } | null>(null);
+
+  // Clear Screen Toggle
+  const [clearScreenMode, setClearScreenMode] = useState(false);
+
+  // Drill & Mining Upgrades State (+22% Boosted Drill Power = 24.4 DPS!)
+  const [upgrades, setUpgrades] = useState({
+    power: 24.4,
+    speed: 1.35,
+    backpack: STARTING_BACKPACK_CAPACITY,
+    elevatorSpeed: 35.0, // 35 m/s (Faster than Taipei 101's 16.8 m/s!)
+    scanner: false
+  });
+
+  // Automatic Proximity State
+  const [isAutoDrilling, setIsAutoDrilling] = useState(false);
+  const [nearElevator, setNearElevator] = useState(false);
+  const [nearTrader, setNearTrader] = useState(false);
+  const [nearFactory, setNearFactory] = useState(false);
+
+  // Mutable refs for state guarding in 60fps loop
+  const drillControllerRef = useRef(new GemDrillController());
+  const elevatorStateRef = useRef<ElevatorState>("mine");
+  const backpackCapRef = useRef(STARTING_BACKPACK_CAPACITY);
+  const keysRef = useRef<{ [key: string]: boolean }>({});
+  const worldRef = useRef<ReturnType<typeof buildMiningWorld> | null>(null);
+  const factoryEngineRef = useRef<ReturnType<typeof createSurfaceFactory> | null>(null);
+  const jewelryFactoryRef = useRef<ReturnType<typeof createJewelryFactory> | null>(null);
+  const managementOfficeRef = useRef<ManagementOfficeBuilding | null>(null);
+  const workerRendererRef = useRef<WorkerRenderer | null>(null);
+
+  // Tracking refs for zero-re-render calculations
+  const totalMinedRef = useRef(0);
+  const cashRef = useRef(100);
+  const lastLocationRef = useRef("Underground Cave Mine");
+  const lastDepthRef = useRef(100);
+  const lastNearElevatorRef = useRef(false);
+  const lastNearTraderRef = useRef(false);
+  const lastNearFactoryRef = useRef(false);
+  const lastNearJewelryShopRef = useRef(false);
+  const lastNearOfficeRef = useRef(false);
+  const lastAutoDrillingRef = useRef(false);
+
+  useEffect(() => {
+    backpackCapRef.current = backpackCapacity;
+  }, [backpackCapacity]);
 
   useEffect(() => {
     cashRef.current = cash;
   }, [cash]);
 
+  // Hook Achievement Unlock Listener
+  useEffect(() => {
+    achievementsSystem.onUnlocked = (ach) => {
+      setAchievementToast({
+        title: ach.title,
+        description: ach.description,
+        rewardCash: ach.rewardCash,
+        icon: ach.icon
+      });
+      soundManager.playCashRegister();
+      setTimeout(() => {
+        setAchievementToast(null);
+      }, 5000);
+    };
+  }, []);
+
+  // Upgrade Handler
+  const handleUpgrade = useCallback((type: keyof typeof upgrades) => {
+    setCash(prevCash => {
+      let cost = 0;
+      if (type === "power") cost = Math.floor(100 * Math.pow(1.5, Math.floor(upgrades.power - 20)));
+      else if (type === "speed") cost = Math.floor(150 * Math.pow(1.6, Math.round((upgrades.speed - 1) * 10)));
+      else if (type === "backpack") cost = Math.floor(120 * Math.pow(1.4, Math.floor(backpackCapacity / 10)));
+      else if (type === "elevatorSpeed") cost = Math.floor(250 * Math.pow(1.5, Math.round((upgrades.elevatorSpeed - 35) / 5)));
+      else if (type === "scanner") cost = 1000;
+
+      if (prevCash < cost) return prevCash;
+
+      setUpgrades(prev => {
+        const next = { ...prev };
+        if (type === "power") {
+          next.power += 5;
+          drillControllerRef.current.upgradePower(5);
+        } else if (type === "speed") {
+          next.speed += 0.2;
+          drillControllerRef.current.upgradeSpeed(0.2);
+        } else if (type === "backpack") {
+          next.backpack += 10;
+          setBackpackCapacity(next.backpack);
+        } else if (type === "elevatorSpeed") {
+          next.elevatorSpeed += 5.0;
+        } else if (type === "scanner") {
+          next.scanner = true;
+          drillControllerRef.current.scanner = true;
+        }
+        return next;
+      });
+
+      return prevCash - cost;
+    });
+  }, [upgrades, backpackCapacity]);
+
+  // Sell All Gems
+  const handleSellGems = useCallback(() => {
+    setInventory(currentInventory => {
+      let totalEarned = 0;
+      const gemMult = managementSystem.getGemValueMultiplier();
+
+      GAME_GEMS.forEach(gem => {
+        const count = currentInventory[gem.id] ?? 0;
+        if (count > 0) {
+          totalEarned += count * Math.round(gem.value * gemMult);
+        }
+      });
+
+      if (totalEarned > 0) {
+        soundManager.playCashRegister();
+        setCash(prev => {
+          const next = prev + totalEarned;
+          cashRef.current = next;
+          return next;
+        });
+        managementSystem.recordRevenue(totalEarned);
+
+        if (worldRef.current) {
+          worldRef.current.deposits.forEach(d => d.clearInventory());
+        }
+      }
+
+      return {};
+    });
+  }, []);
+
+  // Deposit Gems from Backpack to Factory Conveyor
+  const handleDepositBackpackToFactory = useCallback(() => {
+    let depositedCount = 0;
+    const gemsToTransfer: GemType[] = [];
+
+    // 1. Gather all gems from all deposits in the world and clear them cleanly
+    if (worldRef.current) {
+      worldRef.current.deposits.forEach(deposit => {
+        const inv = deposit.getInventory();
+        for (const [gemId, count] of Object.entries(inv)) {
+          if (count > 0) {
+            const gemConfig = GAME_GEMS.find(g => g.id === gemId) ?? GAME_GEMS[0];
+            for (let i = 0; i < count; i++) {
+              gemsToTransfer.push(gemConfig);
+            }
+          }
+        }
+        deposit.clearInventory();
+      });
+    }
+
+    // 2. Also check inventory state if deposits were already empty
+    if (gemsToTransfer.length === 0) {
+      for (const [gemId, count] of Object.entries(inventory)) {
+        if (count > 0) {
+          const gemConfig = GAME_GEMS.find(g => g.id === gemId) ?? GAME_GEMS[0];
+          for (let i = 0; i < count; i++) {
+            gemsToTransfer.push(gemConfig);
+          }
+        }
+      }
+    }
+
+    // 3. Physically transfer gems onto factory conveyor
+    if (factoryEngineRef.current && gemsToTransfer.length > 0) {
+      for (const gem of gemsToTransfer) {
+        factoryEngineRef.current.addGem(gem);
+        depositedCount++;
+      }
+      soundManager.playConveyorMotor(true);
+    }
+
+    if (depositedCount > 0) {
+      setInventory({});
+      soundManager.playCashRegister();
+      setFactoryNotification(`✨ Backpack emptied! Deposited ${depositedCount} gems onto factory conveyor (Backpack: 0 / ${backpackCapacity}). Processing through Driller, Crusher, Washer, Compactor & Gem Jam.`);
+      setTimeout(() => setFactoryNotification(null), 5000);
+    }
+  }, [inventory, backpackCapacity]);
+
+  // Primary Three.js Mounting & Physics Loop
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x171512);
-    // Increased fog for vertical depth
-    scene.fog = new THREE.Fog(0x171512, 20, 65);
+    // Detect software WebGL renderer string for safe frame pacing
+    const isSoftwareGl = (() => {
+      const gl = document.createElement("canvas").getContext("webgl2");
+      if (!gl) return true;
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+      const gpu = String(gl.getParameter(param));
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+    })();
 
-    const camera = new THREE.PerspectiveCamera(65, mount.clientWidth / mount.clientHeight, 0.1, 200);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    // Scene & Camera
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f1418);
+    scene.fog = new THREE.Fog(0x0f1418, 20, 65);
+
+    const camera = new THREE.PerspectiveCamera(
+      65,
+      mount.clientWidth / mount.clientHeight,
+      0.1,
+      180
+    );
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !isSoftwareGl,
+      powerPreference: "high-performance"
+    });
+
     renderer.setSize(mount.clientWidth, mount.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.shadowMap.enabled = true;
+    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 1.5));
+    renderer.shadowMap.enabled = !isSoftwareGl;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+
     mount.appendChild(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xb6c6d1, 0x38291c, 1.5));
-    const light = new THREE.PointLight(0xffd39b, 100, 45);
-    light.position.set(0, 7, 0);
-    scene.add(light);
+    // Studio & Ambient Lighting
+    scene.add(new THREE.HemisphereLight(0x38bdf8, 0x1e1b18, 1.2));
+    const playerLight = new THREE.PointLight(0xffedd5, 30, 20);
+    scene.add(playerLight);
 
-    const surfaceLight = new THREE.DirectionalLight(0xffe5b9, 2.2);
-    surfaceLight.position.set(-15, 45, 15);
-    surfaceLight.castShadow = true;
-    scene.add(surfaceLight);
+    // Build Mine Cave, Ravines & Surface Outpost
+    const world = buildMiningWorld(scene);
+    worldRef.current = world;
 
-    // Textures
-    function texture(base: string, speckles: string) {
-      const canvas = document.createElement("canvas");
-      canvas.width = canvas.height = 256;
-      const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = base;
-      ctx.fillRect(0, 0, 256, 256);
-      for (let i = 0; i < 5000; i++) {
-        ctx.fillStyle = speckles;
-        ctx.globalAlpha = Math.random() * 0.5;
-        ctx.fillRect(Math.random() * 256, Math.random() * 256, Math.random() * 4, Math.random() * 4);
-      }
-      ctx.globalAlpha = 1;
-      const t = new THREE.CanvasTexture(canvas);
-      t.wrapS = t.wrapT = THREE.RepeatWrapping;
-      return t;
-    }
+    // Build Player Character Rig
+    const playerGroup = new THREE.Group();
+    playerGroup.position.set(0, 0, -6);
+    scene.add(playerGroup);
 
-    const dirt = texture("#51402e", "#9b7953");
-    const stone = texture("#55504a", "#a19a8d");
-
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(100, 100),
-      new THREE.MeshStandardMaterial({ map: dirt, roughness: 1 })
+    // Player Body Parts
+    const bodyMesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.35, 0.75, 4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.1;
-    ground.receiveShadow = true;
-    scene.add(ground);
+    bodyMesh.position.y = 0.725;
+    playerGroup.add(bodyMesh);
 
-    const rockMaterial = new THREE.MeshStandardMaterial({ map: stone, roughness: 1 });
-
-    // Cave formations
-    for (let z = -35; z < 10; z += 3.5) {
-      for (let y = 0; y < 13; y += 3) {
-        for (const side of [-1, 1]) {
-          const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 1), rockMaterial);
-          rock.position.set(side * (9 + Math.random()), y + Math.random(), z + Math.random());
-          rock.scale.set(2.5, 2.5, 2.5);
-          rock.castShadow = true;
-          scene.add(rock);
-        }
-      }
-    }
-
-    // Player
-    const player = new THREE.Group();
-    player.position.set(0, 0, 2.5);
-    scene.add(player);
-
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.32, 0.7, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x40534a })
+    const backpackMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.65, 0.75, 0.35),
+      new THREE.MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.8 })
     );
-    body.position.y = 1;
-    player.add(body);
+    backpackMesh.position.set(0, 0.95, 0.38);
+    playerGroup.add(backpackMesh);
 
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.23, 16, 12),
-      new THREE.MeshStandardMaterial({ color: 0xc18c70 })
+    // 3D Gem Tower Group stacked on player's backpack
+    const backpackTowerGroup = new THREE.Group();
+    backpackTowerGroup.position.set(0, 1.35, 0.38);
+    playerGroup.add(backpackTowerGroup);
+
+    const helmetMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 16, 12),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3, metalness: 0.2 })
     );
-    head.position.y = 1.65;
-    player.add(head);
+    helmetMesh.position.y = 1.45;
+    playerGroup.add(helmetMesh);
 
-    const equipment = new THREE.Group();
-    player.add(equipment);
+    const headlight = new THREE.PointLight(0xfffbeb, 15, 12);
+    headlight.position.set(0, 1.5, -0.3);
+    playerGroup.add(headlight);
 
-    const backpackModel = new THREE.Mesh(
-      new THREE.BoxGeometry(0.58, 0.68, 0.32),
-      new THREE.MeshStandardMaterial({ color: 0x3c352b })
+    // Automatic Drill Equipment
+    const drillArm = new THREE.Group();
+    drillArm.position.set(0.45, 0.8, -0.4);
+    playerGroup.add(drillArm);
+
+    const drillBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.22, 0.6, 12),
+      new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.8 })
     );
-    backpackModel.position.set(0, 1, 0.35);
-    equipment.add(backpackModel);
-
-    const helmet = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0xe7b72c })
-    );
-    helmet.position.y = 1.82;
-    equipment.add(helmet);
-
-    const drill = new THREE.Group();
-    drill.position.set(0.4, 0.95, -0.4);
-    player.add(drill);
+    drillBody.rotation.x = Math.PI / 2;
+    drillArm.add(drillBody);
 
     const drillBit = new THREE.Mesh(
-      new THREE.ConeGeometry(0.2, 0.55, 8),
-      new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8 })
+      new THREE.ConeGeometry(0.18, 0.6, 12),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.1 })
     );
     drillBit.rotation.x = -Math.PI / 2;
-    drill.add(drillBit);
+    drillBit.position.z = -0.4;
+    drillArm.add(drillBit);
 
-    // Production Engine
-    const factoryX = -5;
-    const factoryZ = 8;
-    const production = createGemstoneProduction(scene, {
-      backpackCapacity: 12,
-      factoryPosition: new THREE.Vector3(factoryX, 30, factoryZ),
-      onInventoryChanged: (items) => setInventory(items)
+    // Sparks Particle System
+    const sparksGeometry = new THREE.BufferGeometry();
+    const sparkCount = 30;
+    const sparkPositions = new Float32Array(sparkCount * 3);
+    for (let i = 0; i < sparkCount * 3; i++) sparkPositions[i] = 0;
+    sparksGeometry.setAttribute("position", new THREE.BufferAttribute(sparkPositions, 3));
+
+    const sparksMaterial = new THREE.PointsMaterial({
+      color: 0xfbbf24,
+      size: 0.15,
+      transparent: true,
+      opacity: 0
     });
-    productionRef.current = production;
 
-    const drillEffects = createMiningDrillEffects(scene, camera);
+    const sparksPoints = new THREE.Points(sparksGeometry, sparksMaterial);
+    drillArm.add(sparksPoints);
 
-    const caveDeposits: { deposit: CaveDeposit; target: any }[] = [];
-    for (let i = 0; i < 7; i++) {
-      const deposit = production.createCaveDeposit(
-        new THREE.Vector3((i % 2 === 0 ? -1 : 1) * 4, 0.55, -5 - i * 4),
-        i === 6 // Make last one bonus
-      );
-      const target = drillEffects.registerRock(deposit.mesh);
-      caveDeposits.push({ deposit, target });
-    }
-
-    // New Elevator Controller
-    const elevator = new ElevatorController({
-      x: 0,
-      z: 5,
-      mineY: 0,
-      surfaceY: 30,
-      speed: 10,
-      onArrive: (floor) => {
-        setLocation(floor === "surface" ? "Surface" : "Underground");
-        setMessage(floor === "surface" ? "Welcome to the surface!" : "Welcome back underground!");
+    // Separate Jewelry Production Factory Engine at Z: 180 (Connected via outdoor road)
+    const jewelryFactory = createJewelryFactory(scene, {
+      position: new THREE.Vector3(0, 0, 180),
+      onJewelryManufactured: (item) => {
+        managementSystem.recordJewelryManufactured();
+        setJewelryInventory(jewelryFactory.getJewelryInventory());
+        setFactoryNotification(`✨ Finished ${item.name} manufactured & stored in Factory Output Storage! ($${item.price})`);
+        setTimeout(() => setFactoryNotification(null), 4500);
       }
     });
-    scene.add(elevator.group);
+    jewelryFactoryRef.current = jewelryFactory;
 
-    // Surface Visuals (Moved to be above the mine)
-    const surfaceDecor = new THREE.Group();
-    surfaceDecor.position.set(0, 30, 5);
-    scene.add(surfaceDecor);
-
-    const surfaceGround = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ color: 0x415d2a, roughness: 1 }));
-    surfaceGround.rotation.x = -Math.PI / 2;
-    surfaceGround.position.y = -0.05;
-    surfaceDecor.add(surfaceGround);
-
-    for (let i = 0; i < 40; i++) {
-      const isTree = Math.random() > 0.5;
-      const x = (Math.random() - 0.5) * 85;
-      const z = (Math.random() - 0.5) * 85;
-      if (Math.abs(x) < 7 && Math.abs(z) < 7) continue; // Keep space for elevator
-      if (isTree) {
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 1.5, 8), new THREE.MeshStandardMaterial({ color: 0x4d3319 }));
-        trunk.position.set(x, 0.75, z);
-        surfaceDecor.add(trunk);
-        const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2.5, 8), new THREE.MeshStandardMaterial({ color: 0x2d4d19 }));
-        leaves.position.set(x, 2.5, z);
-        surfaceDecor.add(leaves);
-      } else {
-        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8 + Math.random() * 0.7, 0), rockMaterial);
-        rock.position.set(x, 0.4, z);
-        rock.rotation.set(Math.random(), Math.random(), Math.random());
-        surfaceDecor.add(rock);
+    // Surface Factory Engine at Z: 105 (Surface Base) -> Automatically sends finished gems to Jewelry Factory pipeline!
+    const factoryEngine = createSurfaceFactory(scene, {
+      position: new THREE.Vector3(0, 0, 105),
+      onFinished: (value: number, gemType: GemType) => {
+        const gemMult = managementSystem.getGemValueMultiplier();
+        const boostedValue = Math.round(value * gemMult);
+        setCash(prev => {
+          const next = prev + boostedValue;
+          cashRef.current = next;
+          return next;
+        });
+        managementSystem.recordRevenue(boostedValue);
+        managementSystem.recordGemProcessed();
+        if (jewelryFactoryRef.current) {
+          jewelryFactoryRef.current.addProcessedGem(gemType);
+        }
       }
-    }
+    });
+    factoryEngineRef.current = factoryEngine;
 
-    const upgradeTents = createUpgradeTents(scene, cash, new THREE.Vector3(0, 30, 25));
-    (window as any).upgradeTents = upgradeTents;
+    // 3D Physical Management Headquarters Building at Z: 135
+    const managementOffice = createManagementOfficeBuilding(scene, new THREE.Vector3(0, 0, 135));
+    managementOfficeRef.current = managementOffice;
 
-    // Workers
-    const workers: THREE.Group[] = [];
-    function spawnWorker() {
-      const worker = new THREE.Group();
-      worker.position.set((Math.random() - 0.5) * 15, 30, 15 + (Math.random() - 0.5) * 10);
-      scene.add(worker);
-      
-      const wBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.6, 4, 8), new THREE.MeshStandardMaterial({ color: 0x3b5998 }));
-      wBody.position.y = 0.8;
-      worker.add(wBody);
-      const wHead = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), new THREE.MeshStandardMaterial({ color: 0xdbac82 }));
-      wHead.position.y = 1.45;
-      worker.add(wHead);
-      const wCap = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.1, 12), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-      wCap.position.y = 1.6;
-      worker.add(wCap);
-      
-      workers.push(worker);
-    }
+    // 3D Physical Animated Worker Renderer
+    const workerRenderer = createWorkerRenderer(scene);
+    workerRenderer.updateWorkers(managementSystem.getWorkers());
+    workerRendererRef.current = workerRenderer;
 
-    const mineRadius = 2.5;
+    // Wire Gem Collection Discovery hook to all ore deposits for Gem Encyclopedia & Achievements
+    world.deposits.forEach(deposit => {
+      deposit.options.onGemCollected = (collectedGem) => {
+        totalMinedRef.current++;
+        const discovery = gemEncyclopediaSystem.recordDiscovery(collectedGem.id);
+        if (discovery.isFirstDiscovery && discovery.gem) {
+          setFeaturedDiscoveredGem(discovery.gem);
+          setIsEncyclopediaOpen(true);
+          soundManager.playCashRegister();
+        }
+      };
+    });
 
-    // Joystick
-    const joystick = document.createElement("div");
-    joystick.style.cssText = "position:absolute;bottom:28px;left:25px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.5);touch-action:none;z-index:5;";
-    const knob = document.createElement("div");
-    knob.style.cssText = "position:absolute;left:35px;top:35px;width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.8);";
-    joystick.appendChild(knob);
-    mount.appendChild(joystick);
+    // Joystick Touch Control Setup
+    let joyX = 0;
+    let joyY = 0;
+    let joyActive = false;
 
-    let joyX = 0, joyY = 0, active = false;
-    function moveJoystick(e: PointerEvent) {
-      const rect = joystick.getBoundingClientRect();
+    const joystickContainer = document.createElement("div");
+    joystickContainer.style.cssText =
+      "position:absolute;bottom:28px;left:28px;width:120px;height:120px;border-radius:50%;background:rgba(15,23,42,0.7);border:2px solid rgba(56,189,248,0.5);touch-action:none;z-index:50;backdrop-filter:blur(6px);box-shadow:0 10px 25px rgba(0,0,0,0.5);";
+    const joystickKnob = document.createElement("div");
+    joystickKnob.style.cssText =
+      "position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,#38bdf8,#0284c7);box-shadow:0 4px 12px rgba(0,0,0,0.4);border:2px solid #ffffff;";
+    joystickContainer.appendChild(joystickKnob);
+    mount.appendChild(joystickContainer);
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!joyActive) return;
+      const rect = joystickContainer.getBoundingClientRect();
       const dx = e.clientX - (rect.left + rect.width / 2);
       const dy = e.clientY - (rect.top + rect.height / 2);
-      const distance = Math.min(40, Math.hypot(dx, dy));
+      const dist = Math.min(42, Math.hypot(dx, dy));
       const angle = Math.atan2(dy, dx);
-      joyX = Math.cos(angle) * distance / 40;
-      joyY = Math.sin(angle) * distance / 40;
-      knob.style.transform = `translate(${joyX * 40}px,${joyY * 40}px)`;
-    }
-    const onDown = (e: PointerEvent) => { active = true; joystick.setPointerCapture(e.pointerId); moveJoystick(e); };
-    const onMove = (e: PointerEvent) => { if (active) moveJoystick(e); };
-    const onUp = () => { active = false; joyX = joyY = 0; knob.style.transform = "translate(0px,0px)"; };
-    joystick.addEventListener("pointerdown", onDown);
-    joystick.addEventListener("pointermove", onMove);
-    joystick.addEventListener("pointerup", onUp);
-    joystick.addEventListener("pointercancel", onUp);
+      joyX = (Math.cos(angle) * dist) / 42;
+      joyY = (Math.sin(angle) * dist) / 42;
+      joystickKnob.style.transform = `translate(${joyX * 42}px, ${joyY * 42}px)`;
+    };
 
-    let previous = performance.now();
-    let animationId = 0;
+    const handlePointerDown = (e: PointerEvent) => {
+      joyActive = true;
+      joystickContainer.setPointerCapture(e.pointerId);
+      handlePointerMove(e);
+    };
+
+    const handlePointerUp = () => {
+      joyActive = false;
+      joyX = 0;
+      joyY = 0;
+      joystickKnob.style.transform = "translate(0px, 0px)";
+    };
+
+    joystickContainer.addEventListener("pointerdown", handlePointerDown);
+    joystickContainer.addEventListener("pointermove", handlePointerMove);
+    joystickContainer.addEventListener("pointerup", handlePointerUp);
+    joystickContainer.addEventListener("pointercancel", handlePointerUp);
+
+    // Keyboard Listeners (WASD / Arrows)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      keysRef.current[e.key.toLowerCase()] = true;
+      if (e.key.toLowerCase() === "e") {
+        const distToElevator = Math.hypot(playerGroup.position.x, playerGroup.position.z - 2);
+        const distToOffice = Math.hypot(playerGroup.position.x - 0, playerGroup.position.z - 129);
+        if (distToOffice < 4.8 && elevatorStateRef.current === "surface") {
+          setIsOfficeOpen(prev => !prev);
+        } else if (distToElevator < 3.2 && elevatorStateRef.current === "mine") {
+          triggerElevator("traveling-up");
+        } else if (distToElevator < 3.2 && elevatorStateRef.current === "surface") {
+          triggerElevator("traveling-down");
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      keysRef.current[e.key.toLowerCase()] = false;
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    // Elevator Travel Function (35.0 m/s Speed)
+    let elevatorProgress = 0;
+    const ELEVATOR_TRAVEL_DISTANCE = 98;
+
+    function triggerElevator(targetState: "traveling-up" | "traveling-down") {
+      if (elevatorStateRef.current === "traveling-up" || elevatorStateRef.current === "traveling-down") return;
+
+      elevatorStateRef.current = targetState;
+      elevatorProgress = 0;
+
+      // Seal Doors
+      world.elevatorDoors[0].position.x = -0.55;
+      world.elevatorDoors[1].position.x = 0.55;
+
+      // Lock player inside cabin platform safely
+      playerGroup.position.set(world.elevatorGroup.position.x, 0.15, world.elevatorGroup.position.z);
+      playerGroup.rotation.y = 0;
+    }
+
+    // Function to render 3D Backpack Gem Tower
+    let currentRenderedGemCount = -1;
+    function updateBackpackGemTower(totalGems: number) {
+      if (totalGems === currentRenderedGemCount) return;
+      currentRenderedGemCount = totalGems;
+
+      while (backpackTowerGroup.children.length > 0) {
+        const child = backpackTowerGroup.children[0];
+        backpackTowerGroup.remove(child);
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      }
+
+      for (let i = 0; i < totalGems; i++) {
+        const gemConfig = GAME_GEMS[i % GAME_GEMS.length];
+        const gemMesh = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.14, 1),
+          new THREE.MeshPhysicalMaterial({
+            color: gemConfig.color,
+            emissive: gemConfig.color,
+            emissiveIntensity: 0.8,
+            roughness: 0.05,
+            metalness: 0.15,
+            transmission: 0.82,
+            ior: 1.58,
+            thickness: 0.6,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.08
+          })
+        );
+        gemMesh.position.set(
+          ((i % 2) - 0.5) * 0.08,
+          i * 0.14,
+          ((Math.floor(i / 2) % 2) - 0.5) * 0.08
+        );
+        gemMesh.rotation.set(0.2, i * 0.5, 0.2);
+        backpackTowerGroup.add(gemMesh);
+      }
+    }
+
+    // Helper functions for guarded state updates
+    function setLocationGuarded(newLoc: string) {
+      if (lastLocationRef.current !== newLoc) {
+        lastLocationRef.current = newLoc;
+        setLocation(newLoc);
+      }
+    }
+
+    function setDepthGuarded(newDepth: number) {
+      if (lastDepthRef.current !== newDepth) {
+        lastDepthRef.current = newDepth;
+        setDepthFeet(newDepth);
+      }
+    }
+
+    function setNearElevatorGuarded(val: boolean) {
+      if (lastNearElevatorRef.current !== val) {
+        lastNearElevatorRef.current = val;
+        setNearElevator(val);
+      }
+    }
+
+    function setNearTraderGuarded(val: boolean) {
+      if (lastNearTraderRef.current !== val) {
+        lastNearTraderRef.current = val;
+        setNearTrader(val);
+      }
+    }
+
+    function setNearFactoryGuarded(val: boolean) {
+      if (lastNearFactoryRef.current !== val) {
+        lastNearFactoryRef.current = val;
+        setNearFactory(val);
+      }
+    }
+
+    function setIsAutoDrillingGuarded(val: boolean) {
+      if (lastAutoDrillingRef.current !== val) {
+        lastAutoDrillingRef.current = val;
+        setIsAutoDrilling(val);
+      }
+    }
+
+    // Main Game Loop
+    let previousTime = performance.now();
+    let animationFrameId = 0;
+    let lastFactoryUnloadTime = 0;
+    let lastAchievementCheckTime = 0;
 
     const animate = (now: number) => {
-      const dt = Math.min((now - previous) / 1000, 0.04);
-      previous = now;
+      const dt = Math.min((now - previousTime) / 1000, 0.05);
+      previousTime = now;
 
-      upgradeTents.setCash(cashRef.current);
-      upgradeTents.update(dt, player.position);
-      const currentNearby = upgradeTents.getNearbyTent();
-      if (currentNearby !== nearbyTentRef.current) {
-        nearbyTentRef.current = currentNearby;
-        setNearbyTent(currentNearby);
-      }
-      
-      const stats = upgradeTents.getStats();
-      if (Math.random() > 0.98) setUpgradeStats(stats);
+      const keys = keysRef.current;
+      const state = elevatorStateRef.current;
 
-      // Update elevator and carry player
-      elevator.update(dt, player.position);
+      // --------------------------------------------------
+      // 1. HYPER-SPEED ELEVATOR LOCOMOTION
+      // --------------------------------------------------
+      if (state === "traveling-up" || state === "traveling-down") {
+        const currentSpeed = upgrades.elevatorSpeed;
+        elevatorProgress += (currentSpeed * dt) / ELEVATOR_TRAVEL_DISTANCE;
 
-      // Update workers
-      if (upgradeStats && workers.length < upgradeStats.workerCount) {
-        spawnWorker();
-      }
-      workers.forEach((w, i) => {
-        w.position.x += Math.sin(now * 0.001 + i) * dt * 2;
-        w.position.z += Math.cos(now * 0.001 + i) * dt * 2;
-        w.rotation.y = Math.atan2(Math.sin(now * 0.001 + i), Math.cos(now * 0.001 + i));
-      });
+        soundManager.playHyperElevatorSound(true, elevatorProgress);
 
-      if (Math.random() > 0.95) {
-        const s = production.getStats();
-        const f = production.getFinishedGems();
-        setFactoryStats({ ...s, finishedCount: f.length });
-      }
+        if (state === "traveling-up") {
+          const currentZ = THREE.MathUtils.lerp(2, 100, Math.min(1, elevatorProgress));
+          world.elevatorGroup.position.z = currentZ;
+          playerGroup.position.copy(world.elevatorGroup.position);
 
-      // Sync elevator status
-      if (elevator) {
-        setElevatorStatus(elevator.status);
-      }
+          const currentDepth = Math.round(100 * (1 - elevatorProgress));
+          setDepthGuarded(currentDepth);
 
-      if (!elevator.isMoving) {
-        player.position.x += joyX * dt * 4 * stats.playerSpeed;
-        player.position.z += joyY * dt * 4 * stats.playerSpeed;
-        if (Math.abs(joyX) + Math.abs(joyY) > 0.1) player.rotation.y = Math.atan2(joyX, joyY);
-      }
+          if (elevatorProgress >= 1) {
+            elevatorStateRef.current = "surface";
+            setLocationGuarded("Surface Mining Outpost");
+            setShowFactory(true);
+            soundManager.playHyperElevatorSound(false);
+            soundManager.setMusicZone("surface");
 
-      const isUnderground = player.position.y < 15;
-
-      if (isUnderground) {
-        player.position.x = THREE.MathUtils.clamp(player.position.x, -7, 7);
-        player.position.z = THREE.MathUtils.clamp(player.position.z, -32, 7);
-      } else {
-        player.position.x = THREE.MathUtils.clamp(player.position.x, -40, 40);
-        player.position.z = THREE.MathUtils.clamp(player.position.z, -10, 40);
-      }
-
-      const nearElevator = Math.hypot(player.position.x - 0, player.position.z - 5) < 2.5;
-      const onPlatform = Math.abs(player.position.y - elevator.platformY) < 1.5;
-      
-      // Factory Intersections
-      const nearDelivery = !isUnderground && Math.hypot(player.position.x - (factoryX - 15), player.position.z - (factoryZ + 5)) < 3;
-      const nearSeller = !isUnderground && Math.hypot(player.position.x - (factoryX + 33), player.position.z - (factoryZ - 2)) < 3;
-      
-      // Machines are at -15, -9, -3, 3, 9, 15, 21, 27
-      const nearMachines = [0,1,2,3,4,5,6,7].map(i => {
-        const mx = factoryX - 10 + i * 6;
-        const mz = factoryZ + 3; // Stand in front
-        return !isUnderground && Math.hypot(player.position.x - mx, player.position.z - mz) < 2.5;
-      });
-
-      // Smart Elevator Logic
-      if (nearElevator && !elevator.isMoving) {
-        const playerFloor: ElevatorFloor = isUnderground ? "mine" : "surface";
-        if (onPlatform) {
-          if (!active) {
-            const targetFloor = playerFloor === "mine" ? "surface" : "mine";
-            if (elevator.floor !== targetFloor) elevator.requestFloor(targetFloor);
+            world.elevatorDoors[0].position.x = -2.1;
+            world.elevatorDoors[1].position.x = 2.1;
           }
         } else {
-          if (elevator.floor !== playerFloor) elevator.requestFloor(playerFloor);
-        }
-      }
+          const currentZ = THREE.MathUtils.lerp(100, 2, Math.min(1, elevatorProgress));
+          world.elevatorGroup.position.z = currentZ;
+          playerGroup.position.copy(world.elevatorGroup.position);
 
-      // Collection
-      if (!elevator.isMoving && isUnderground) {
-        production.collectNearby(player.position);
-      }
+          const currentDepth = Math.round(100 * elevatorProgress);
+          setDepthGuarded(currentDepth);
 
-      // Mining logic
-      if (!elevator.isMoving && isUnderground) {
-        let closest: CaveDeposit | null = null;
-        let closestTarget: any = null;
-        let closestDist = Infinity;
-        for (const entry of caveDeposits) {
-          if (!entry.deposit.active) continue;
-          const d = player.position.distanceTo(entry.deposit.mesh.position);
-          if (d < closestDist) { closestDist = d; closest = entry.deposit; closestTarget = entry.target; }
-        }
-        
-        const mining = closest && closestDist < mineRadius;
-        drill.visible = !!mining;
+          if (elevatorProgress >= 1) {
+            elevatorStateRef.current = "mine";
+            setLocationGuarded("Underground Cave Mine");
+            setShowFactory(false);
+            soundManager.playHyperElevatorSound(false);
+            soundManager.setMusicZone("cave");
 
-        if (mining && inventory.length < stats.backpackCapacity) {
-          drill.rotation.z += dt * 18 * stats.drillSpeed;
-          production.mineDeposit(closest!, stats.drillPower * dt * 10);
-          if (closestTarget) {
-            closestTarget.damage = 1 - closest!.health / closest!.maxHealth;
-            drillEffects.start(closestTarget);
+            world.elevatorDoors[0].position.x = -2.1;
+            world.elevatorDoors[1].position.x = 2.1;
           }
-          setMessage("Mining gems...");
-        } else {
-          drillEffects.stop();
-          if (inventory.length >= stats.backpackCapacity) setMessage("Backpack full! Go to elevator.");
-          else if (nearElevator) setMessage("Stand still to use elevator.");
-          else setMessage("Explore the mine");
         }
-      } else if (!isUnderground) {
-        drill.visible = false;
-        drillEffects.stop();
-        
-        if (nearDelivery && inventory.length > 0) setMessage("Press E to Deliver Gems");
-        else if (nearMachines[0]) setMessage("Press E: DRILLER");
-        else if (nearMachines[1]) setMessage("Press E: CRUSHER");
-        else if (nearMachines[2]) setMessage("Press E: WASHER");
-        else if (nearMachines[3]) setMessage("Press E: COMPACTOR");
-        else if (nearMachines[4]) setMessage("Press E: JAM TREATMENT");
-        else if (nearMachines[5]) setMessage("Press E: ANALYZER");
-        else if (nearMachines[6]) setMessage("Press E: SHAPE PENDANT");
-        else if (nearMachines[7]) setMessage("Press E: POLISH JEWELRY");
-        else if (nearSeller) setMessage("Selling finished goods...");
-        else if (currentNearby) setMessage(`Press UPGRADES for ${currentNearby}`);
-        else if (nearElevator) setMessage("Stand still to return to mine.");
-        else setMessage("Welcome to the surface!");
+      }
 
-        // Auto-sell at seller station
-        if (nearSeller) {
-          const finished = production.getFinishedGems();
-          if (finished.length > 0) {
-            finished.forEach(g => {
-              setCash(prev => prev + g.value);
-              production.removeFinishedGem(g.id);
+      // --------------------------------------------------
+      // 2. JOYSTICK & KEYBOARD LOCOMOTION WITH LADDER CLIMBING
+      // --------------------------------------------------
+      let moveX = joyX;
+      let moveZ = joyY;
+
+      if (keys["w"] || keys["arrowup"]) moveZ -= 1;
+      if (keys["s"] || keys["arrowdown"]) moveZ += 1;
+      if (keys["a"] || keys["arrowleft"]) moveX -= 1;
+      if (keys["d"] || keys["arrowright"]) moveX += 1;
+
+      const inputLen = Math.hypot(moveX, moveZ);
+      const isMoving = inputLen > 0.1 && (state === "mine" || state === "surface");
+
+      if (isMoving) {
+        const normX = moveX / Math.max(1, inputLen);
+        const normZ = moveZ / Math.max(1, inputLen);
+
+        playerGroup.position.x += normX * dt * 5.8;
+        playerGroup.position.z += normZ * dt * 5.8;
+        playerGroup.rotation.y = THREE.MathUtils.damp(
+          playerGroup.rotation.y,
+          Math.atan2(normX, normZ),
+          14,
+          dt
+        );
+      }
+
+      // Automatic Cliff Ladder Climbing
+      if (state === "mine") {
+        if (playerGroup.position.z < -27) {
+          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, -3.5, 8, dt);
+          setLocationGuarded("Deep Ravine & Crystal Water");
+          setDepthGuarded(500);
+        } else {
+          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, 0, 8, dt);
+          setLocationGuarded("Underground Cave Mine");
+          setDepthGuarded(100);
+        }
+
+        playerGroup.position.x = THREE.MathUtils.clamp(playerGroup.position.x, -13.5, 13.5);
+        playerGroup.position.z = THREE.MathUtils.clamp(playerGroup.position.z, -38.5, 3.5);
+      } else if (state === "surface") {
+        playerGroup.position.y = 0;
+        playerGroup.position.x = THREE.MathUtils.clamp(playerGroup.position.x, -55, 55);
+        playerGroup.position.z = THREE.MathUtils.clamp(playerGroup.position.z, 85, 360);
+
+        if (playerGroup.position.z < 130) setLocationGuarded("Surface Mining Outpost & Original Factory");
+        else if (playerGroup.position.z < 180) setLocationGuarded("Gemstone Cutting & Polishing Plants");
+        else if (playerGroup.position.z < 230) setLocationGuarded("Precious Metal & Jewelry Manufacturing Plant");
+        else if (playerGroup.position.z < 280) setLocationGuarded("Jewelry Finishing & Inspection Plant");
+        else if (playerGroup.position.z < 320) setLocationGuarded("Jewelry Retail Shopping District");
+        else setLocationGuarded("Storage & Shipping Depot");
+      }
+
+      // Proximity Triggers
+      const distToElevator = Math.hypot(
+        playerGroup.position.x - world.elevatorGroup.position.x,
+        playerGroup.position.z - world.elevatorGroup.position.z
+      );
+      setNearElevatorGuarded(distToElevator < 3.2 && (state === "mine" || state === "surface"));
+
+      const distToTrader = Math.hypot(
+        playerGroup.position.x - (-12),
+        playerGroup.position.z - 95
+      );
+      setNearTraderGuarded(distToTrader < 4.5 && state === "surface");
+
+      // Executive Management Office Proximity (Z: 129 entrance)
+      const distToOffice = Math.hypot(
+        playerGroup.position.x - 0,
+        playerGroup.position.z - 129
+      );
+      const isNearOffice = distToOffice < 4.8 && state === "surface";
+      if (lastNearOfficeRef.current !== isNearOffice) {
+        lastNearOfficeRef.current = isNearOffice;
+        setNearOffice(isNearOffice);
+      }
+
+      // Factory Conveyor Belt Proximity
+      const distToFactoryBelt = Math.hypot(
+        playerGroup.position.x - 0,
+        playerGroup.position.z - 105
+      );
+      const isNearBelt = distToFactoryBelt < 5.0 && state === "surface";
+      setNearFactoryGuarded(isNearBelt);
+
+      // AUTOMATIC FACTORY GEMS UNLOADING ONTO 3D CONVEYOR BELT
+      if (isNearBelt && now - lastFactoryUnloadTime > 350) {
+        lastFactoryUnloadTime = now;
+
+        let gemToProcess: { type: GemType; deposit: GemOreDeposit } | null = null;
+
+        for (const deposit of world.deposits) {
+          const inv = deposit.getInventory();
+          for (const [gemId, count] of Object.entries(inv)) {
+            if (count > 0) {
+              const gemConfig = GAME_GEMS.find(g => g.id === gemId) ?? GAME_GEMS[0];
+              gemToProcess = { type: gemConfig, deposit };
+              break;
+            }
+          }
+          if (gemToProcess) break;
+        }
+
+        if (gemToProcess && factoryEngineRef.current) {
+          // Remove 1 gem from deposit inventory
+          const removed = gemToProcess.deposit.removeGem(gemToProcess.type.id);
+          if (removed) {
+            // Re-sync overall inventory state
+            const newOverallInventory: Record<string, number> = {};
+            world.deposits.forEach(d => {
+              Object.entries(d.getInventory()).forEach(([gId, cnt]) => {
+                if (cnt > 0) {
+                  newOverallInventory[gId] = (newOverallInventory[gId] ?? 0) + cnt;
+                }
+              });
             });
+            setInventory(newOverallInventory);
+
+            // Add physical 3D gem onto conveyor belt!
+            factoryEngineRef.current.addGem(gemToProcess.type);
+            soundManager.playConveyorMotor(true);
           }
         }
-      } else {
-        drill.visible = false;
-        drillEffects.stop();
       }
 
-      const camTarget = isUnderground
-        ? new THREE.Vector3(player.position.x, player.position.y + 4.5, player.position.z + 8)
-        : new THREE.Vector3(player.position.x, player.position.y + 7, player.position.z + 10);
-      camera.position.lerp(camTarget, 0.07);
-      camera.lookAt(player.position.x, player.position.y + 1, player.position.z - 2);
-      light.position.set(player.position.x, player.position.y + 7, player.position.z);
+      // --------------------------------------------------
+      // 3. AUTOMATIC DRILLING MECHANICS (+22% BOOSTED POWER)
+      // --------------------------------------------------
+      let nearbyTargetDeposit: GemOreDeposit | null = null;
+      let minDistance = Infinity;
 
-      production.update(dt);
-      drillEffects.update(dt);
-      renderer.render(scene, camera);
-      animationId = requestAnimationFrame(animate);
-    };
-
-    animationId = requestAnimationFrame(animate);
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "KeyE") {
-        const p = player.position;
-        const isUnderground = p.y < 15;
-        if (!isUnderground && productionRef.current) {
-          const prod = productionRef.current;
-          if (Math.hypot(p.x - (factoryX - 15), p.z - (factoryZ + 5)) < 3) prod.deliverGems();
-          
-          const mCheck = (i: number) => {
-            const mx = factoryX - 10 + i * 6;
-            const mz = factoryZ + 3;
-            return Math.hypot(p.x - mx, p.z - mz) < 2.5;
-          };
-
-          if (mCheck(0)) prod.processAtDriller();
-          if (mCheck(1)) prod.processAtCrusher();
-          if (mCheck(2)) prod.processAtWasher();
-          if (mCheck(3)) prod.processAtCompactor();
-          if (mCheck(4)) prod.processAtJam();
-          if (mCheck(5)) prod.processAtAnalyzer();
-          if (mCheck(6)) prod.processAtPendantMachine("pendant");
-          if (mCheck(7)) prod.polishGems();
+      if (state === "mine") {
+        for (const deposit of world.deposits) {
+          if (deposit.broken) continue;
+          const dist = playerGroup.position.distanceTo(deposit.group.position);
+          if (dist < minDistance) {
+            minDistance = dist;
+            nearbyTargetDeposit = deposit;
+          }
         }
       }
+
+      const autoDrilling = state === "mine" && nearbyTargetDeposit !== null && minDistance < 4.5;
+      setIsAutoDrillingGuarded(autoDrilling);
+      soundManager.playDrillSound(autoDrilling, drillControllerRef.current.speed);
+
+      if (autoDrilling && nearbyTargetDeposit) {
+        drillBit.rotation.z += dt * 35 * drillControllerRef.current.speed;
+
+        // Spark Particle Effect
+        const posAttr = sparksGeometry.attributes.position as THREE.BufferAttribute;
+        for (let i = 0; i < sparkCount; i++) {
+          posAttr.setXYZ(
+            i,
+            (Math.random() - 0.5) * 0.55,
+            (Math.random() - 0.5) * 0.55,
+            -0.6 - Math.random() * 0.6
+          );
+        }
+        posAttr.needsUpdate = true;
+        sparksMaterial.opacity = 0.95;
+
+        const rockBroke = drillControllerRef.current.drill(nearbyTargetDeposit, dt);
+        soundManager.playRockCrunch();
+
+        if (rockBroke) {
+          soundManager.playGemChime(0.5);
+          setRemainingCaveGems(prev => Math.max(0, prev - 250));
+        }
+      } else {
+        sparksMaterial.opacity = 0;
+      }
+
+      // --------------------------------------------------
+      // 4. LOOSE GEM DROPS, REGENERATION & AUTOMATIC PICKUP
+      // --------------------------------------------------
+      let currentTotalGemsInBackpack = 0;
+      world.deposits.forEach(d => {
+        Object.values(d.getInventory()).forEach(cnt => {
+          currentTotalGemsInBackpack += cnt;
+        });
+      });
+
+      let anyPickedUp = false;
+      for (const deposit of world.deposits) {
+        deposit.updateDrops(dt, playerGroup.position.y + 0.15);
+
+        if (state === "mine") {
+          const pickedUp = deposit.collectNear(
+            playerGroup.position,
+            2.8,
+            backpackCapRef.current,
+            currentTotalGemsInBackpack
+          );
+
+          if (pickedUp > 0) {
+            anyPickedUp = true;
+            currentTotalGemsInBackpack += pickedUp;
+          }
+        }
+      }
+
+      if (anyPickedUp) {
+        soundManager.playGemChime(0.85);
+
+        const newOverallInventory: Record<string, number> = {};
+        world.deposits.forEach(d => {
+          Object.entries(d.getInventory()).forEach(([id, cnt]) => {
+            if (cnt > 0) newOverallInventory[id] = (newOverallInventory[id] ?? 0) + cnt;
+          });
+        });
+        setInventory(newOverallInventory);
+      }
+
+      // Update 3D Backpack Gem Tower
+      updateBackpackGemTower(currentTotalGemsInBackpack);
+
+      // --------------------------------------------------
+      // 5. CAMERA & SCENE RENDER
+      // --------------------------------------------------
+      const camOffset = state === "mine"
+        ? new THREE.Vector3(playerGroup.position.x, playerGroup.position.y + 5.5, playerGroup.position.z + 9)
+        : new THREE.Vector3(playerGroup.position.x, 8.0, playerGroup.position.z + 12);
+
+      camera.position.lerp(camOffset, 0.08);
+      camera.lookAt(playerGroup.position.x, playerGroup.position.y + 1.2, playerGroup.position.z);
+      playerLight.position.set(playerGroup.position.x, playerGroup.position.y + 4.5, playerGroup.position.z);
+
+      const distToJewelryShop = Math.hypot(
+        playerGroup.position.x - 10,
+        playerGroup.position.z - 186
+      );
+      const isNearJewelryShop = distToJewelryShop < 5.0 && state === "surface";
+      if (lastNearJewelryShopRef.current !== isNearJewelryShop) {
+        lastNearJewelryShopRef.current = isNearJewelryShop;
+        setNearJewelryShop(isNearJewelryShop);
+      }
+
+      // Update Audio Zone based on player coordinates
+      if (state === "mine") {
+        soundManager.setMusicZone("cave");
+      } else if (state === "surface") {
+        if (playerGroup.position.z < 120) {
+          soundManager.setMusicZone("surface");
+        } else if (playerGroup.position.z < 260) {
+          soundManager.setMusicZone("factory");
+        } else {
+          soundManager.setMusicZone("jewelry");
+        }
+      }
+
+      // Worker Wages deduction & financial rate calculation
+      const wageDeduction = managementSystem.tickWages(dt);
+      if (wageDeduction > 0) {
+        setCash(prev => {
+          const next = Math.max(0, prev - wageDeduction);
+          cashRef.current = next;
+          return next;
+        });
+      }
+
+      // Periodic Achievements & Milestone Check (Every 500ms)
+      if (now - lastAchievementCheckTime > 500) {
+        lastAchievementCheckTime = now;
+        achievementsSystem.checkAll(
+          {
+            totalMined: totalMinedRef.current,
+            totalProcessed: managementSystem.getStats().totalGemsProcessed,
+            totalJewelry: managementSystem.getStats().totalJewelryManufactured,
+            workerCount: managementSystem.getWorkers().length,
+            cash: cashRef.current,
+            depth: lastDepthRef.current,
+            discoveredGemsCount: gemEncyclopediaSystem.getDiscoveredGems().length
+          },
+          (reward) => {
+            setCash(prev => {
+              const next = prev + reward;
+              cashRef.current = next;
+              return next;
+            });
+            soundManager.playCashRegister();
+          }
+        );
+      }
+
+      world.updateWorld(dt);
+      managementOffice.update(dt);
+      workerRenderer.update(dt);
+
+      // Business upgrade multipliers applied to factory processing lines
+      const conveyorMult = managementSystem.getConveyorSpeedMultiplier();
+      const machineMult = managementSystem.getMachineSpeedMultiplier();
+      factoryEngine.update(dt * conveyorMult * machineMult);
+      if (jewelryFactoryRef.current) {
+        jewelryFactoryRef.current.update(dt * machineMult);
+      }
+      renderer.render(scene, camera);
+
+      if (isSoftwareGl) {
+        setTimeout(() => {
+          animationFrameId = requestAnimationFrame(animate);
+        }, 30);
+      } else {
+        animationFrameId = requestAnimationFrame(animate);
+      }
     };
-    window.addEventListener("keydown", handleKeyDown);
 
-    const resize = () => { camera.aspect = mount.clientWidth / mount.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(mount.clientWidth, mount.clientHeight); };
-    window.addEventListener("resize", resize);
+    animationFrameId = requestAnimationFrame(animate);
 
+    // Resize Handler
+    const handleResize = () => {
+      if (!mount) return;
+      camera.aspect = mount.clientWidth / mount.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(mount.clientWidth, mount.clientHeight);
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    // Cleanup
     return () => {
-      cancelAnimationFrame(animationId);
-      window.removeEventListener("resize", resize);
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
-      joystick.removeEventListener("pointerdown", onDown);
-      joystick.removeEventListener("pointermove", onMove);
-      joystick.removeEventListener("pointerup", onUp);
-      joystick.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("keyup", handleKeyUp);
+      joystickContainer.removeEventListener("pointerdown", handlePointerDown);
+      joystickContainer.removeEventListener("pointermove", handlePointerMove);
+      joystickContainer.removeEventListener("pointerup", handlePointerUp);
+      joystickContainer.removeEventListener("pointercancel", handlePointerUp);
+
       renderer.dispose();
-      production.dispose();
-      upgradeTents.dispose();
-      drillEffects.dispose();
-      elevator.dispose();
-      workers.forEach(w => scene.remove(w));
+      world.disposeWorld();
+      factoryEngine.dispose();
+      workerRenderer.dispose();
+      managementOffice.dispose();
+      if (jewelryFactoryRef.current) {
+        jewelryFactoryRef.current.dispose();
+      }
+
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-      if (mount.contains(joystick)) mount.removeChild(joystick);
+      if (mount.contains(joystickContainer)) mount.removeChild(joystickContainer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [upgrades.elevatorSpeed]);
 
-  const handlePurchase = useCallback((upgrade: keyof UpgradeStats) => {
-    const api = (window as any).upgradeTents as UpgradeAPI;
-    if (api && api.purchase(upgrade)) {
-      const newStats = api.getStats();
-      setCash(newStats.cash);
-      setUpgradeStats(newStats);
+  const handleSellJewelry = useCallback((productId: string) => {
+    if (jewelryFactoryRef.current) {
+      const baseEarned = jewelryFactoryRef.current.sellJewelry(productId);
+      if (baseEarned > 0) {
+        const priceMult = managementSystem.getJewelryPriceMultiplier();
+        const boostedEarned = Math.round(baseEarned * priceMult);
+        setCash(prev => {
+          const next = prev + boostedEarned;
+          cashRef.current = next;
+          return next;
+        });
+        managementSystem.recordRevenue(boostedEarned);
+        soundManager.playCashRegister();
+        setJewelryInventory(jewelryFactoryRef.current.getJewelryInventory());
+      }
     }
   }, []);
 
-  const handleHireWorker = useCallback(() => {
-    const api = (window as any).upgradeTents as UpgradeAPI;
-    if (api && api.hireWorker()) {
-      const newStats = api.getStats();
-      setCash(newStats.cash);
-      setUpgradeStats(newStats);
-    }
-  }, []);
+  const totalGemsCount = Object.values(inventory).reduce((a, b) => a + b, 0);
 
   return (
-    <div style={{ width: "100%", height: "100dvh", position: "relative", overflow: "hidden" }}>
-      <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
-      
-      <motion.div 
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        style={{
-          position: "absolute", top: 14, left: 14, right: 14,
-          color: "white", fontFamily: "Arial, sans-serif",
-          textShadow: "0 2px 5px black", pointerEvents: "none", zIndex: 10
+    <div className="w-full h-dvh relative overflow-hidden bg-slate-950 select-none">
+      {/* 3D Canvas Container */}
+      <div ref={mountRef} className="w-full h-full" />
+
+      {/* Mining HUD Overlay */}
+      <MiningHUD
+        cash={cash}
+        inventory={inventory}
+        jewelryInventory={jewelryInventory}
+        totalGemsCount={totalGemsCount}
+        backpackCapacity={backpackCapacity}
+        location={location}
+        depthFeet={depthFeet}
+        elevatorSpeed={upgrades.elevatorSpeed}
+        remainingCaveGems={remainingCaveGems}
+        upgrades={upgrades}
+        onUpgrade={handleUpgrade}
+        onSellGems={handleSellGems}
+        onSellJewelry={handleSellJewelry}
+        onCallElevator={() => {
+          if (nearElevator) {
+            const event = new KeyboardEvent("keydown", { key: "e" });
+            window.dispatchEvent(event);
+          }
         }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 800 }}>⛏ GEMSTONE EMPIRE</div>
-        <div style={{ marginTop: 7 }}>💰 Cash: ${cash}</div>
-        <motion.div key={inventory.length} initial={{ scale: 1.1 }} animate={{ scale: 1 }}>
-          🎒 Backpack: {inventory.length}/{upgradeStats?.backpackCapacity || 12}
-        </motion.div>
-        <div>📍 {location}</div>
-        <div style={{ marginTop: 8, fontSize: 13, opacity: 0.8 }}>{message}</div>
-        
-        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 10, height: 10, borderRadius: "50%", background: elevatorStatus.includes("TRAVELING") ? "#facc15" : "#4ade80" }} />
-          <div style={{ fontSize: 12, fontWeight: "bold", letterSpacing: 0.5 }}>ELEVATOR: {elevatorStatus}</div>
-        </div>
-      </motion.div>
+        nearElevator={nearElevator}
+        nearTrader={nearTrader}
+        nearFactory={nearFactory}
+        nearJewelryShop={nearJewelryShop}
+        isAutoDrilling={isAutoDrilling}
+        clearScreenMode={clearScreenMode}
+        onToggleClearScreen={() => setClearScreenMode(!clearScreenMode)}
+        onDepositToFactory={handleDepositBackpackToFactory}
+        factoryNotification={factoryNotification}
+        onOpenOffice={() => setIsOfficeOpen(true)}
+        onOpenEncyclopedia={() => {
+          setFeaturedDiscoveredGem(null);
+          setIsEncyclopediaOpen(true);
+        }}
+        nearOffice={nearOffice}
+        achievementToast={achievementToast}
+      />
 
-      {/* Production Overlay */}
-      {location === "Surface" && (
-        <div style={{ position: "absolute", top: 14, right: 14, background: "rgba(0,0,0,0.75)", padding: 14, borderRadius: 10, color: "white", zIndex: 10, border: "1px solid rgba(255,255,255,0.15)", backdropFilter: "blur(10px)", minWidth: 200 }}>
-          <div style={{ fontWeight: "bold", marginBottom: 8, color: "#4ade80", fontSize: 14, letterSpacing: 0.5 }}>FACTORY PIPELINE</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Storage:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.delivered}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Drilled:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.drilled}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Crushed:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.crushed}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Washed:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.washed}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Compacted:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.compacted}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Jammed:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.jammed}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Analyzed:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.analyzed}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Shaped:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.shaped}</div>
-            <div style={{ fontSize: 11, opacity: 0.8 }}>Polished:</div><div style={{ fontSize: 11, textAlign: "right" }}>{factoryStats.polished}</div>
-          </div>
-          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.2)", fontSize: 13, fontWeight: "bold", color: "#facc15" }}>
-            Ready to Sell: {factoryStats.finishedCount}
-          </div>
-        </div>
-      )}
+      {/* Corporate Executive Management Headquarters Modal */}
+      <ManagementModal
+        isOpen={isOfficeOpen}
+        onClose={() => setIsOfficeOpen(false)}
+        cash={cash}
+        onCashChange={(newCash) => {
+          setCash(newCash);
+          cashRef.current = newCash;
+        }}
+        onWorkersUpdated={() => {
+          if (workerRendererRef.current) {
+            workerRendererRef.current.updateWorkers(managementSystem.getWorkers());
+          }
+        }}
+      />
 
-      <AnimatePresence>
-        {nearbyTent && !showUpgradeMenu && (
-          <motion.button
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            onClick={() => setShowUpgradeMenu(true)}
-            style={upgradeButton}
-          >
-            OPEN UPGRADES
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showUpgradeMenu && nearbyTent && upgradeStats && (
-          <UpgradeMenu
-            tentName={nearbyTent}
-            stats={upgradeStats}
-            onPurchase={handlePurchase}
-            onHireWorker={handleHireWorker}
-            onClose={() => setShowUpgradeMenu(false)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Illustrated Gemstone Encyclopedia Modal */}
+      <EncyclopediaModal
+        isOpen={isEncyclopediaOpen}
+        onClose={() => {
+          setIsEncyclopediaOpen(false);
+          setFeaturedDiscoveredGem(null);
+        }}
+        featuredGem={featuredDiscoveredGem}
+      />
     </div>
   );
 }
-
-const upgradeButton: React.CSSProperties = {
-  position: "fixed",
-  bottom: 120,
-  left: "50%",
-  transform: "translateX(-50%)",
-  padding: "14px 28px",
-  background: "#22c55e",
-  color: "white",
-  fontWeight: "bold",
-  borderRadius: 12,
-  border: "none",
-  boxShadow: "0 10px 25px -5px rgba(34, 197, 94, 0.4)",
-  cursor: "pointer",
-  zIndex: 1500
-};

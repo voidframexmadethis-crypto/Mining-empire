@@ -44,11 +44,12 @@ export class ElevatorController {
 
     this.surfaceY = options.surfaceY ?? 0;
     this.mineY = options.mineY ?? -30;
-    this.speed = options.speed ?? 8;
+    this.speed = options.speed ?? 36; // Sea Tower / Ultra Express speed (~36 m/s)
     this.onArrive = options.onArrive;
 
     this.group.position.set(x, 0, z);
     this.group.name = "PermanentMineElevator";
+
 
     const steel = new THREE.MeshStandardMaterial({
       color: 0x555d65,
@@ -220,7 +221,7 @@ export class ElevatorController {
 
     this.targetFloor = floor;
     this.closeDoors();
-    this.doorTimer = 0.8;
+    this.doorTimer = 0.25; // Snappy Hancock express closure
 
     return true;
   }
@@ -248,7 +249,7 @@ export class ElevatorController {
 
   get status(): string {
     if (this.moving) {
-      return this.targetFloor === "surface" ? "TRAVELING UP" : "TRAVELING DOWN";
+      return this.targetFloor === "surface" ? "EXPRESS ASCENT ⚡" : "EXPRESS DESCENT ⚡";
     }
     if (this.doorOpen) {
       if (this.doorTravel < 0.99) return "OPENING DOORS";
@@ -269,18 +270,18 @@ export class ElevatorController {
   ): void {
     const dt = Math.min(Math.max(deltaSeconds, 0), 0.05);
 
-    // Door animation.
+    // Fast Door animation.
     if (this.doorTravel < 1 && this.doorOpen) {
-      this.doorTravel = Math.min(1, this.doorTravel + dt * 4);
+      this.doorTravel = Math.min(1, this.doorTravel + dt * 10);
       this.setDoors(this.doorTravel);
     }
 
     if (!this.doorOpen && this.doorTravel > 0) {
-      this.doorTravel = Math.max(0, this.doorTravel - dt * 4);
+      this.doorTravel = Math.max(0, this.doorTravel - dt * 10);
       this.setDoors(this.doorTravel);
     }
 
-    // Wait for doors to close before moving.
+    // Wait briefly for doors to close before moving.
     if (!this.moving && this.targetFloor !== this.currentFloor) {
       if (this.doorTimer > 0) {
         this.doorTimer -= dt;
@@ -313,26 +314,26 @@ export class ElevatorController {
 
     const movementDelta = this.platform.position.y - oldY;
 
-    // Carry the player with the moving platform.
+    // Carry the player with the moving platform smoothly.
     if (playerPosition && movementDelta !== 0) {
       const localPlayer = this.group.worldToLocal(
         playerPosition.clone()
       );
 
       const onPlatform =
-        Math.abs(localPlayer.x) <= this.platformWidth / 2 - 0.25 &&
-        Math.abs(localPlayer.z) <= this.platformDepth / 2 - 0.25 &&
+        Math.abs(localPlayer.x) <= this.platformWidth / 2 + 0.5 &&
+        Math.abs(localPlayer.z) <= this.platformDepth / 2 + 0.5 &&
         Math.abs(
           localPlayer.y -
           (oldY + this.platformHeight / 2)
-        ) <= 1.2;
+        ) <= 2.5;
 
       if (onPlatform) {
         playerPosition.y += movementDelta;
       }
     }
 
-    // Keep the doors aligned with the platform.
+    // Keep doors locked to platform Y position.
     this.leftDoor.position.y =
       this.platform.position.y + this.doorHeight / 2;
 
@@ -380,3 +381,4 @@ export class ElevatorController {
     this.group.removeFromParent();
   }
 }
+

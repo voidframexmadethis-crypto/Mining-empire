@@ -1,6 +1,6 @@
 {
-  "name": "Mining Empire",
-  "description": "Build your mining empire in this immersive 3D tycoon game with automated factories and deep-earth exploration.",
+  "name": "Deep Gem Mine 3D",
+  "description": "Hyper-speed elevator deep mining simulator with crystal drill, voxel ore deposits, and gem factory.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,7 +1,9 @@
 import * as THREE from "three";
+import { GemType, GAME_GEMS } from "./gems";
+import { soundManager } from "./audio";
 
 export type SurfaceFactoryEngine = {
-  addOre(amount?: number): void;
+  addGem(gem: GemType): void;
   update(delta: number): void;
   dispose(): void;
   getFinishedCount(): number;
@@ -9,82 +11,110 @@ export type SurfaceFactoryEngine = {
 
 export type SurfaceFactoryOptions = {
   position?: THREE.Vector3;
-  onFinished?: (amount: number) => void;
+  onFinished?: (gemValue: number, gemType: GemType) => void;
+};
+
+type ProcessingGem = {
+  mesh: THREE.Mesh;
+  gemType: GemType;
+  x: number;
+  stage: number;
+  speed: number;
 };
 
 export function createSurfaceFactory(
   scene: THREE.Scene,
   options: SurfaceFactoryOptions = {}
 ): SurfaceFactoryEngine {
-  const { position = new THREE.Vector3(0, 0, -12), onFinished } = options;
-  
+  const { position = new THREE.Vector3(0, 0, 105), onFinished } = options;
+
   const root = new THREE.Group();
   root.position.copy(position);
   scene.add(root);
 
-  const orePieces: FactoryOre[] = [];
-  const animated: THREE.Object3D[] = [];
-  const lights: THREE.PointLight[] = [];
+  const activeGems: ProcessingGem[] = [];
+  const rotatingParts: THREE.Object3D[] = [];
+  const pistonParts: { mesh: THREE.Object3D; baseY: number; amp: number; freq: number }[] = [];
+  const pointLights: THREE.PointLight[] = [];
 
   let finishedCount = 0;
-  let lightTimer = 0;
+  let animTimer = 0;
 
-  const metal = new THREE.MeshStandardMaterial({
-    color: 0x59636a,
+  // High-Grade Metallic Industrial Materials
+  const darkIron = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
     metalness: 0.85,
-    roughness: 0.3
-  });
-
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0x92999c,
-    metalness: 0.9,
-    roughness: 0.22
-  });
-
-  const darkSteel = new THREE.MeshStandardMaterial({
-    color: 0x20272b,
-    metalness: 0.78,
-    roughness: 0.42
-  });
-
-  const rubber = new THREE.MeshStandardMaterial({
-    color: 0x101214,
-    roughness: 0.95
-  });
-
-  const yellow = new THREE.MeshStandardMaterial({
-    color: 0xf0ae27,
-    metalness: 0.4,
     roughness: 0.4
   });
 
-  const glass = new THREE.MeshPhysicalMaterial({
-    color: 0x75b8c5,
-    metalness: 0.2,
-    roughness: 0.12,
-    transparent: true,
-    opacity: 0.48
+  const gunmetal = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    metalness: 0.9,
+    roughness: 0.25
   });
 
-  const oreMaterials = [
-    new THREE.MeshStandardMaterial({ color: 0x42a994, roughness: 0.9 }),
-    new THREE.MeshStandardMaterial({ color: 0x4982d0, roughness: 0.9 }),
-    new THREE.MeshStandardMaterial({ color: 0xb17acb, roughness: 0.9 }),
-    new THREE.MeshStandardMaterial({ color: 0xd29a43, roughness: 0.9 })
-  ];
+  const chrome = new THREE.MeshStandardMaterial({
+    color: 0xf1f5f9,
+    metalness: 0.95,
+    roughness: 0.1
+  });
 
+  const safetyYellow = new THREE.MeshStandardMaterial({
+    color: 0xeab308,
+    metalness: 0.4,
+    roughness: 0.35
+  });
+
+  const beltRubber = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.9
+  });
+
+  const washGlass = new THREE.MeshPhysicalMaterial({
+    color: 0x38bdf8,
+    metalness: 0.05,
+    roughness: 0.05,
+    transparent: true,
+    opacity: 0.5,
+    transmission: 0.9,
+    ior: 1.5,
+    clearcoat: 1.0
+  });
+
+  // Factory Atmospheric Dust System
+  const factoryDustGeo = new THREE.BufferGeometry();
+  const fDustCount = 120;
+  const fDustPos = new Float32Array(fDustCount * 3);
+  for (let i = 0; i < fDustCount; i++) {
+    fDustPos[i * 3] = (Math.random() - 0.5) * 26;
+    fDustPos[i * 3 + 1] = Math.random() * 8;
+    fDustPos[i * 3 + 2] = (Math.random() - 0.5) * 12;
+  }
+  factoryDustGeo.setAttribute("position", new THREE.BufferAttribute(fDustPos, 3));
+  const factoryDustMat = new THREE.PointsMaterial({
+    color: 0xffedd5,
+    size: 0.1,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending
+  });
+  const factoryDust = new THREE.Points(factoryDustGeo, factoryDustMat);
+  root.add(factoryDust);
+
+  const laserBeamMat = new THREE.MeshStandardMaterial({
+    color: 0x10b981,
+    emissive: 0x10b981,
+    emissiveIntensity: 3.0
+  });
+
+  // Helper geometry creators
   function addBox(
     parent: THREE.Object3D,
-    x: number,
-    y: number,
-    z: number,
-    sx: number,
-    sy: number,
-    sz: number,
-    material: THREE.Material
+    x: number, y: number, z: number,
+    sx: number, sy: number, sz: number,
+    mat: THREE.Material
   ) {
-    const geometry = new THREE.BoxGeometry(sx, sy, sz);
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -94,18 +124,12 @@ export function createSurfaceFactory(
 
   function addCylinder(
     parent: THREE.Object3D,
-    x: number,
-    y: number,
-    z: number,
-    radius: number,
-    length: number,
-    material: THREE.Material,
+    x: number, y: number, z: number,
+    r: number, h: number,
+    mat: THREE.Material,
     axis: "x" | "y" | "z" = "y"
   ) {
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(radius, radius, length, 20),
-      material
-    );
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 20), mat);
     mesh.position.set(x, y, z);
     if (axis === "x") mesh.rotation.z = Math.PI / 2;
     if (axis === "z") mesh.rotation.x = Math.PI / 2;
@@ -115,250 +139,308 @@ export function createSurfaceFactory(
     return mesh;
   }
 
-  function addPipe(
-    parent: THREE.Object3D,
-    points: THREE.Vector3[],
-    radius: number,
-    material: THREE.Material
-  ) {
-    const curve = new THREE.CatmullRomCurve3(points);
-    const geometry = new THREE.TubeGeometry(curve, 32, radius, 10, false);
-    const pipe = new THREE.Mesh(geometry, material);
-    pipe.castShadow = true;
-    parent.add(pipe);
-    return pipe;
+  // 1. HEAVY FACTORY FLOORING & STEEL STRUCTURAL TRUSSES
+  addBox(root, 0, -0.3, 0, 30, 0.6, 14, darkIron);
+
+  // Floor Steel Grating Lines
+  for (let x = -13; x <= 13; x += 2.6) {
+    addBox(root, x, 0.02, 0, 0.1, 0.04, 13.8, gunmetal);
   }
 
-  function addBolt(parent: THREE.Object3D, x: number, y: number, z: number) {
-    const bolt = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.055, 0.035, 6),
-      steel
-    );
-    bolt.position.set(x, y, z);
-    bolt.castShadow = true;
-    parent.add(bolt);
+  // Overhead Steel Structural Gantry Beams & Overhead Lights
+  for (let x of [-12, -6, 0, 6, 12]) {
+    addBox(root, x, 4.5, -5.5, 0.35, 9, 0.35, gunmetal);
+    addBox(root, x, 4.5, 5.5, 0.35, 9, 0.35, gunmetal);
+    addBox(root, x, 8.8, 0, 0.35, 0.35, 11.2, chrome);
+
+    // Overhead High-Bay Industrial Spotlights
+    const bayLight = new THREE.PointLight(0xffedd5, 18, 14);
+    bayLight.position.set(x, 8.2, 0);
+    root.add(bayLight);
+    pointLights.push(bayLight);
   }
 
-  function addWarningLight(x: number, y: number, z: number) {
-    const lamp = new THREE.Mesh(
-      new THREE.SphereGeometry(0.14, 20, 16),
+  // Overhead Connecting Roof Truss Rafters
+  for (let z of [-4, 0, 4]) {
+    addBox(root, 0, 8.8, z, 26, 0.3, 0.3, darkIron);
+  }
+
+  // 2. MAIN INDUSTRIAL CONVEYOR BELT SYSTEM (X: -13 to +13, Z: 2.5)
+  const beltGroup = new THREE.Group();
+  beltGroup.position.set(0, 0.6, 2.5);
+  root.add(beltGroup);
+
+  // Belt Bed
+  addBox(beltGroup, 0, 0, 0, 26.5, 0.25, 1.8, beltRubber);
+  // Yellow Safety Guard Rails
+  addBox(beltGroup, 0, 0.3, -0.92, 26.5, 0.45, 0.12, safetyYellow);
+  addBox(beltGroup, 0, 0.3, 0.92, 26.5, 0.45, 0.12, safetyYellow);
+
+  // 36 Metallic Cylindrical Rollers along the conveyor belt
+  for (let i = 0; i < 36; i++) {
+    const rx = -13 + i * 0.74;
+    const roller = addCylinder(beltGroup, rx, -0.16, 0, 0.15, 1.75, chrome, "z");
+    rotatingParts.push(roller);
+  }
+
+  // Support Legs for Conveyor Frame
+  for (let x = -12; x <= 12; x += 4) {
+    for (let side of [-1, 1]) {
+      addBox(beltGroup, x, -0.45, side * 0.75, 0.2, 0.9, 0.2, darkIron);
+    }
+  }
+
+  // 3. INTAKE HOPPER & FINISHED GEM COLLECTOR VAULT
+  // Intake Hopper (Left X: -13)
+  const hopper = new THREE.Group();
+  hopper.position.set(-13, 1.2, 2.5);
+  root.add(hopper);
+
+  const hopperBase = new THREE.Mesh(
+    new THREE.ConeGeometry(1.6, 1.8, 4),
+    safetyYellow
+  );
+  hopperBase.rotation.y = Math.PI / 4;
+  hopperBase.rotation.x = Math.PI;
+  hopper.add(hopperBase);
+
+  // Finished Gem Golden Collector Vault (Right X: +13)
+  const vault = new THREE.Group();
+  vault.position.set(13, 0.8, 2.5);
+  root.add(vault);
+
+  addBox(vault, 0, 0.5, 0, 2.8, 1.4, 2.4, new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.9, roughness: 0.2 }));
+  addBox(vault, 0, 1.25, 0, 3.0, 0.2, 2.6, chrome);
+
+  const vaultLight = new THREE.PointLight(0xf59e0b, 25, 8);
+  vaultLight.position.set(13, 2.5, 2.5);
+  root.add(vaultLight);
+
+  // 4. UNREAL ENGINE-QUALITY INDUSTRIAL MACHINERY (5 STAGES)
+  const machineConfigs = [
+    { name: "GEM DRILLER", x: -10, color: 0x3b82f6, lightColor: 0x60a5fa },
+    { name: "GEM CRUSHER", x: -5, color: 0xef4444, lightColor: 0xf87171 },
+    { name: "GEM WASHER", x: 0, color: 0x06b6d4, lightColor: 0x38bdf8 },
+    { name: "GEM COMPACTOR", x: 5, color: 0xf59e0b, lightColor: 0xfbbf24 },
+    { name: "GEM JAM / REFINER", x: 10, color: 0x10b981, lightColor: 0x34d399 }
+  ];
+
+  machineConfigs.forEach((cfg, idx) => {
+    const mGroup = new THREE.Group();
+    mGroup.position.set(cfg.x, 0, -1.8);
+    root.add(mGroup);
+
+    const machineMat = new THREE.MeshStandardMaterial({
+      color: cfg.color,
+      metalness: 0.6,
+      roughness: 0.35
+    });
+
+    // Machine Base Housing
+    addBox(mGroup, 0, 1.2, 0, 3.8, 2.4, 3.4, darkIron);
+    addBox(mGroup, 0, 2.5, 0, 3.6, 0.3, 3.2, machineMat);
+    addBox(mGroup, 0, 2.7, 0, 3.2, 0.2, 2.8, safetyYellow);
+
+    // Front & Back Heavy Steel Pillars
+    for (let px of [-1.75, 1.75]) {
+      addBox(mGroup, px, 1.4, 0, 0.2, 2.8, 3.3, gunmetal);
+    }
+
+    // Machine Specific Machinery Components
+    if (idx === 0) {
+      // 1. GEM DRILLER: Diamond Drill Press Head
+      const drillShaft = addCylinder(mGroup, 0, 3.6, 1.8, 0.18, 2.2, chrome);
+      pistonParts.push({ mesh: drillShaft, baseY: 3.6, amp: 0.4, freq: 6 });
+
+      const drillBit = addCylinder(mGroup, 0, 2.3, 1.8, 0.22, 0.8, chrome);
+      drillBit.rotation.x = Math.PI;
+      rotatingParts.push(drillBit);
+    } else if (idx === 1) {
+      // 2. GEM CRUSHER: Heavy Steel Jaws
+      const leftJaw = addBox(mGroup, -0.6, 2.6, 1.8, 0.8, 1.2, 1.4, gunmetal);
+      const rightJaw = addBox(mGroup, 0.6, 2.6, 1.8, 0.8, 1.2, 1.4, gunmetal);
+      pistonParts.push({ mesh: leftJaw, baseY: 2.6, amp: 0.2, freq: 4 });
+      pistonParts.push({ mesh: rightJaw, baseY: 2.6, amp: -0.2, freq: 4 });
+    } else if (idx === 2) {
+      // 3. GEM WASHER: Illuminated Hydro Glass Chamber
+      const glassTank = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.2, 1.2, 2.2, 24),
+        washGlass
+      );
+      glassTank.position.set(0, 3.2, 0);
+      mGroup.add(glassTank);
+
+      const waterCore = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.0, 1.0, 1.8, 16),
+        new THREE.MeshStandardMaterial({ color: 0x0284c7, emissive: 0x0369a1, emissiveIntensity: 1.2 })
+      );
+      waterCore.position.set(0, 3.2, 0);
+      mGroup.add(waterCore);
+      rotatingParts.push(waterCore);
+    } else if (idx === 3) {
+      // 4. GEM COMPACTOR: Heavy Hydraulic Piston Press
+      const piston = addCylinder(mGroup, 0, 3.8, 1.8, 0.4, 1.8, chrome);
+      pistonParts.push({ mesh: piston, baseY: 3.8, amp: 0.5, freq: 5 });
+
+      const pressPlate = addBox(mGroup, 0, 2.7, 1.8, 1.8, 0.3, 1.6, darkIron);
+      pistonParts.push({ mesh: pressPlate, baseY: 2.7, amp: 0.5, freq: 5 });
+    } else if (idx === 4) {
+      // 5. GEM JAM / REFINER: High-Grade Laser Optics
+      const laserEmitter = addCylinder(mGroup, 0, 4.2, 1.8, 0.35, 1.2, chrome);
+      mGroup.add(laserEmitter);
+
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 2.5, 12),
+        laserBeamMat
+      );
+      beam.position.set(0, 2.6, 1.8);
+      mGroup.add(beam);
+      rotatingParts.push(beam);
+    }
+
+    // Machine Status Beacon Light
+    const beacon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 16, 12),
       new THREE.MeshStandardMaterial({
-        color: 0xffb52b,
-        emissive: 0xff7900,
-        emissiveIntensity: 2
+        color: cfg.lightColor,
+        emissive: cfg.lightColor,
+        emissiveIntensity: 2.5
       })
     );
-    lamp.position.set(x, y, z);
-    root.add(lamp);
-    const light = new THREE.PointLight(0xffa020, 2.5, 5);
-    light.position.copy(lamp.position);
-    root.add(light);
-    lights.push(light);
-  }
+    beacon.position.set(0, 4.4, 0);
+    mGroup.add(beacon);
 
-  // FACTORY FOUNDATION
-  addBox(root, 0, -0.3, 0, 27, 0.6, 13, darkSteel);
+    const mLight = new THREE.PointLight(cfg.lightColor, 20, 8);
+    mLight.position.set(cfg.x, 4.4, -1.8);
+    root.add(mLight);
+    pointLights.push(mLight);
 
-  for (let x = -12; x <= 12; x += 3) {
-    for (let z = -5; z <= 5; z += 2.5) {
-      addBox(root, x, 0.015, z, 2.95, 0.035, 2.45, metal);
-    }
-  }
-
-  for (let x = -12; x <= 12; x += 4) {
-    addBox(root, x, 4.1, -5.8, 0.28, 8, 0.28, darkSteel);
-    addBox(root, x, 4.1, 5.8, 0.28, 8, 0.28, darkSteel);
-    addBox(root, x, 8.1, 0, 0.3, 0.3, 12, steel);
-  }
-
-  for (let z = -4; z <= 4; z += 4) {
-    addBox(root, 0, 8, z, 25, 0.3, 0.25, darkSteel);
-  }
-
-  for (let x = -12; x <= 12; x += 2) {
-    addCylinder(root, x, 1.05, -5.5, 0.06, 1.2, yellow);
-    addCylinder(root, x, 1.05, 5.5, 0.06, 1.2, yellow);
-  }
-
-  for (let x = -10; x <= 10; x += 5) {
-    const lamp = new THREE.PointLight(0xffdfac, 2.5, 12);
-    lamp.position.set(x, 7.6, 0);
-    root.add(lamp);
-  }
-
-  const machinePositions = [-10, -5, 0, 5, 10];
-
-  function buildMachine(index: number, x: number) {
-    const machine = new THREE.Group();
-    machine.position.set(x, 0, -1.6);
-    root.add(machine);
-
-    addBox(machine, 0, 1.05, 0, 3.7, 2.1, 3.3, darkSteel);
-    addBox(machine, 0, 2.2, 0, 3.45, 0.25, 3.05, yellow);
-    addBox(machine, -1.72, 1.2, 0, 0.15, 1.6, 3, steel);
-    addBox(machine, 1.72, 1.2, 0, 0.15, 1.6, 3, steel);
-
-    for (let side of [-1, 1]) {
-      for (let boltY of [0.65, 1.55]) {
-        for (let boltZ of [-1, 1]) {
-          addBolt(machine, side * 1.83, boltY, boltZ);
-        }
-      }
-    }
-
-    const chamber = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.05, 1.25, 1.8, 24),
-      index === 2 ? steel : metal
-    );
-    chamber.position.set(0, 3.1, 0);
-    chamber.castShadow = true;
-    machine.add(chamber);
-    animated.push(chamber);
-
-    const shaft = addCylinder(machine, 0, 3.15, 0, 0.32, 2.6, steel, "x");
-    animated.push(shaft);
-
-    for (let side of [-1, 1]) {
-      const hydraulic = addCylinder(machine, side * 1.4, 2.6, 0.6, 0.17, 1.3, steel);
-      hydraulic.rotation.z = side * -0.3;
-      addCylinder(machine, side * 1.4, 1.8, 0.6, 0.22, 0.6, darkSteel);
-    }
-
-    const motor = addCylinder(machine, 1.9, 2.4, -0.7, 0.48, 1.2, darkSteel, "x");
-    animated.push(motor);
-
-    for (let fin = 0; fin < 8; fin++) {
-      addCylinder(machine, 1.9, 2.4, -1.2 + fin * 0.14, 0.51, 0.045, steel, "x");
-    }
-
-    const windowMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.65, 0.08), glass);
-    windowMesh.position.set(0, 1.4, 1.68);
-    machine.add(windowMesh);
-
-    addWarningLight(x, 3.8, -1.6);
-
+    // Physical 3D Machine Signboard Label
     const canvas = document.createElement("canvas");
     canvas.width = 512; canvas.height = 128;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.fillStyle = "#171b20"; ctx.fillRect(0, 0, 512, 128);
-      ctx.fillStyle = "#ffffff"; ctx.font = "bold 42px Arial"; ctx.textAlign = "center";
-      ctx.fillText(["GEM DRILLER", "GEM CRUSHER", "GEM WASHER", "GEM COMPACTOR", "GEM JAM"][index], 256, 78);
-      const signTexture = new THREE.CanvasTexture(canvas);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 0.78), new THREE.MeshBasicMaterial({ map: signTexture }));
-      sign.position.set(0, 4.25, 1.8);
-      machine.add(sign);
+      ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, 512, 128);
+      ctx.fillStyle = "#e2e8f0"; ctx.font = "bold 44px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(cfg.name, 256, 80);
+      const signTex = new THREE.CanvasTexture(canvas);
+      const signMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.2, 0.8),
+        new THREE.MeshBasicMaterial({ map: signTex })
+      );
+      signMesh.position.set(0, 4.8, 1.72);
+      mGroup.add(signMesh);
     }
+  });
 
-    addPipe(machine, [new THREE.Vector3(-1.2, 2.9, -1), new THREE.Vector3(-1.5, 3.8, -1), new THREE.Vector3(-1.2, 4.2, -1)], 0.12, steel);
+  // Function to add a real physical 3D gem from player's inventory onto conveyor belt
+  function addGem(gemType: GemType) {
+    const gemMesh = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.32, 1),
+      new THREE.MeshPhysicalMaterial({
+        color: gemType.color,
+        emissive: gemType.color,
+        emissiveIntensity: 0.85,
+        roughness: 0.05,
+        metalness: 0.15,
+        transmission: 0.82,
+        ior: 1.58,
+        thickness: 0.7,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08
+      })
+    );
 
-    for (let fx of [-1.4, 1.4]) {
-      for (let fz of [-1.2, 1.2]) {
-        addBox(machine, fx, 0.2, fz, 0.5, 0.4, 0.5, yellow);
-      }
-    }
-  }
+    // Start at Intake Hopper (X: -13)
+    gemMesh.position.set(-13, 1.15, 2.5);
+    gemMesh.castShadow = true;
+    root.add(gemMesh);
 
-  machinePositions.forEach((x, index) => buildMachine(index, x));
-
-  function buildConveyor(x: number) {
-    const belt = new THREE.Group();
-    belt.position.set(x, 0.65, 2.8);
-    root.add(belt);
-    addBox(belt, 0, 0, 0, 4.1, 0.2, 1.6, rubber);
-    addBox(belt, 0, 0.25, -0.82, 4.1, 0.5, 0.12, yellow);
-    addBox(belt, 0, 0.25, 0.82, 4.1, 0.5, 0.12, yellow);
-    for (let roller = -1.7; roller <= 1.7; roller += 0.45) {
-      const wheel = addCylinder(belt, roller, -0.18, 0, 0.18, 1.55, steel, "z");
-      animated.push(wheel);
-    }
-    for (let side of [-1, 1]) {
-      for (let support of [-1.5, 1.5]) {
-        addBox(belt, support, -0.55, side * 0.65, 0.18, 1.1, 0.18, darkSteel);
-      }
-    }
-  }
-
-  for (let x = -10; x <= 10; x += 4) buildConveyor(x);
-
-  addBox(root, -12, 1.5, 2.8, 1.5, 1.8, 2, yellow);
-  addBox(root, -12, 2.45, 2.8, 1.8, 0.2, 2.2, darkSteel);
-
-  for (let x = -9; x <= 9; x += 3) {
-    addPipe(root, [new THREE.Vector3(x, 4.2, -4.4), new THREE.Vector3(x + 0.4, 4.8, -4.4), new THREE.Vector3(x + 1.2, 4.8, -4.4)], 0.1, steel);
-  }
-
-  addBox(root, 12, 1.1, 2.8, 2.2, 2.1, 2.2, darkSteel);
-  addBox(root, 12, 2.2, 2.8, 2.4, 0.2, 2.4, yellow);
-
-  const rockGeometry = new THREE.DodecahedronGeometry(0.45, 1);
-
-  function createRock(x: number, size: number, stage: number) {
-    const material = oreMaterials[Math.floor(Math.random() * oreMaterials.length)];
-    const rock = new THREE.Mesh(rockGeometry, material);
-    rock.scale.set(size * (0.7 + Math.random() * 0.5), size * (0.7 + Math.random() * 0.5), size * (0.7 + Math.random() * 0.5));
-    rock.position.set(x, 1.15, 2.8);
-    rock.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-    rock.castShadow = true;
-    rock.receiveShadow = true;
-    root.add(rock);
-    orePieces.push({ mesh: rock, stage, progress: 0, speed: 2.1 });
-  }
-
-  function addOre(amount = 1) {
-    const count = Math.max(1, Math.min(100, Math.floor(amount)));
-    for (let i = 0; i < count; i++) createRock(-11, 1.1, 0);
+    activeGems.push({
+      mesh: gemMesh,
+      gemType,
+      x: -13,
+      stage: 0,
+      speed: 3.2
+    });
   }
 
   function update(delta: number) {
     const dt = Math.min(delta, 0.05);
-    animated.forEach((part, index) => { part.rotation.x += dt * (index % 2 === 0 ? 1.5 : -1.5); });
-    lightTimer += dt;
-    lights.forEach((light, index) => { light.intensity = 1.5 + Math.sin(lightTimer * 3 + index) * 0.8; });
+    animTimer += dt;
 
-    for (let i = orePieces.length - 1; i >= 0; i--) {
-      const ore = orePieces[i];
-      ore.progress += dt * ore.speed;
-      ore.mesh.position.x += dt * ore.speed;
-      ore.mesh.position.y = 1.15 + Math.sin(lightTimer * 14 + i) * 0.035;
+    // Rotate gears, bit spindles, and rollers
+    rotatingParts.forEach((part, i) => {
+      part.rotation.x += dt * (i % 2 === 0 ? 6 : -6);
+    });
 
-      if (ore.progress >= 4) {
-        const stage = ore.stage;
-        root.remove(ore.mesh);
-        ore.mesh.geometry.dispose();
-        orePieces.splice(i, 1);
+    // Move hydraulic pistons & press heads
+    pistonParts.forEach(p => {
+      p.mesh.position.y = p.baseY + Math.sin(animTimer * p.freq) * p.amp;
+    });
 
-        if (stage >= 4) {
-          finishedCount++;
-          onFinished?.(1);
-          continue;
-        }
+    // Animate physical 3D gems along conveyor belt
+    for (let i = activeGems.length - 1; i >= 0; i--) {
+      const g = activeGems[i];
+      g.x += dt * g.speed;
+      g.mesh.position.x = g.x;
+      g.mesh.position.y = 1.15 + Math.sin(animTimer * 12 + i) * 0.03;
+      g.mesh.rotation.y += dt * 3.5;
 
-        const nextStage = stage + 1;
-        const nextSize = stage === 0 ? 0.48 : stage === 1 ? 0.29 : stage === 2 ? 0.21 : 0.13;
-        const outputCount = stage === 0 ? 3 : stage === 1 ? 2 : 1;
-        for (let chunk = 0; chunk < outputCount; chunk++) createRock(ore.mesh.position.x - 0.2, nextSize, nextStage);
+      // Machine Stage Transformations
+      if (g.x >= -10 && g.stage === 0) {
+        g.stage = 1; // Drilled
+      } else if (g.x >= -5 && g.stage === 1) {
+        g.stage = 2; // Crushed & Faceted
+        (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.85;
+      } else if (g.x >= 0 && g.stage === 2) {
+        g.stage = 3; // Washed & Cleaned
+        g.mesh.scale.set(1.15, 1.15, 1.15);
+      } else if (g.x >= 5 && g.stage === 3) {
+        g.stage = 4; // Compacted & Polished
+        (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+      } else if (g.x >= 10 && g.stage === 4) {
+        g.stage = 5; // Laser Refined
+        g.mesh.rotation.z += dt * 10;
+      }
+
+      // Reached Vault at X >= 12.8 (Processing Complete)
+      if (g.x >= 12.8) {
+        root.remove(g.mesh);
+        g.mesh.geometry.dispose();
+        (g.mesh.material as THREE.Material).dispose();
+        activeGems.splice(i, 1);
+
+        finishedCount++;
+        soundManager.playCashRegister();
+        onFinished?.(g.gemType.value * 2, g.gemType); // 2x processed gem multiplier + gemType passed to Jewelry Factory!
       }
     }
+
+    // Animate factory dust
+    const fPositions = factoryDustGeo.attributes.position.array as Float32Array;
+    for (let i = 0; i < fDustCount; i++) {
+      fPositions[i * 3 + 1] += Math.sin(animTimer + i) * 0.003;
+      if (fPositions[i * 3 + 1] > 8) fPositions[i * 3 + 1] = 0;
+    }
+    factoryDustGeo.attributes.position.needsUpdate = true;
   }
 
   function dispose() {
     scene.remove(root);
-    root.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.geometry.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach((material) => material.dispose());
+    root.traverse(obj => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => m.dispose());
       }
     });
   }
 
-  return { addOre, update, dispose, getFinishedCount: () => finishedCount };
+  return {
+    addGem,
+    update,
+    dispose,
+    getFinishedCount: () => finishedCount
+  };
 }
-
-type FactoryOre = {
-  mesh: THREE.Mesh;
-  stage: number;
-  progress: number;
-  speed: number;
-};
