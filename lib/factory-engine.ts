@@ -7,6 +7,8 @@ export type SurfaceFactoryEngine = {
   update(delta: number): void;
   dispose(): void;
   getFinishedCount(): number;
+  group: THREE.Group;
+  setVisible(visible: boolean): void;
 };
 
 export type SurfaceFactoryOptions = {
@@ -365,43 +367,56 @@ export function createSurfaceFactory(
     });
   }
 
+  let isFactoryVisible = true;
+  function setVisible(val: boolean) {
+    if (isFactoryVisible === val) return;
+    isFactoryVisible = val;
+    root.visible = val;
+  }
+
   function update(delta: number) {
     const dt = Math.min(delta, 0.05);
     animTimer += dt;
 
-    // Rotate gears, bit spindles, and rollers
-    rotatingParts.forEach((part, i) => {
-      part.rotation.x += dt * (i % 2 === 0 ? 6 : -6);
-    });
+    // Only animate visual parts if visible to camera
+    if (isFactoryVisible) {
+      // Rotate gears, bit spindles, and rollers
+      rotatingParts.forEach((part, i) => {
+        part.rotation.x += dt * (i % 2 === 0 ? 6 : -6);
+      });
 
-    // Move hydraulic pistons & press heads
-    pistonParts.forEach(p => {
-      p.mesh.position.y = p.baseY + Math.sin(animTimer * p.freq) * p.amp;
-    });
+      // Move hydraulic pistons & press heads
+      pistonParts.forEach(p => {
+        p.mesh.position.y = p.baseY + Math.sin(animTimer * p.freq) * p.amp;
+      });
+    }
 
-    // Animate physical 3D gems along conveyor belt
+    // Advance gems along conveyor belt (simulation runs even when offscreen)
     for (let i = activeGems.length - 1; i >= 0; i--) {
       const g = activeGems[i];
       g.x += dt * g.speed;
-      g.mesh.position.x = g.x;
-      g.mesh.position.y = 1.15 + Math.sin(animTimer * 12 + i) * 0.03;
-      g.mesh.rotation.y += dt * 3.5;
+
+      if (isFactoryVisible) {
+        g.mesh.position.x = g.x;
+        g.mesh.position.y = 1.15 + Math.sin(animTimer * 12 + i) * 0.03;
+        g.mesh.rotation.y += dt * 3.5;
+      }
 
       // Machine Stage Transformations
       if (g.x >= -10 && g.stage === 0) {
         g.stage = 1; // Drilled
       } else if (g.x >= -5 && g.stage === 1) {
         g.stage = 2; // Crushed & Faceted
-        (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.85;
+        if (isFactoryVisible) (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.85;
       } else if (g.x >= 0 && g.stage === 2) {
         g.stage = 3; // Washed & Cleaned
-        g.mesh.scale.set(1.15, 1.15, 1.15);
+        if (isFactoryVisible) g.mesh.scale.set(1.15, 1.15, 1.15);
       } else if (g.x >= 5 && g.stage === 3) {
         g.stage = 4; // Compacted & Polished
-        (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+        if (isFactoryVisible) (g.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
       } else if (g.x >= 10 && g.stage === 4) {
         g.stage = 5; // Laser Refined
-        g.mesh.rotation.z += dt * 10;
+        if (isFactoryVisible) g.mesh.rotation.z += dt * 10;
       }
 
       // Reached Vault at X >= 12.8 (Processing Complete)
@@ -413,17 +428,19 @@ export function createSurfaceFactory(
 
         finishedCount++;
         soundManager.playCashRegister();
-        onFinished?.(g.gemType.value * 2, g.gemType); // 2x processed gem multiplier + gemType passed to Jewelry Factory!
+        onFinished?.(g.gemType.value * 2, g.gemType);
       }
     }
 
-    // Animate factory dust
-    const fPositions = factoryDustGeo.attributes.position.array as Float32Array;
-    for (let i = 0; i < fDustCount; i++) {
-      fPositions[i * 3 + 1] += Math.sin(animTimer + i) * 0.003;
-      if (fPositions[i * 3 + 1] > 8) fPositions[i * 3 + 1] = 0;
+    // Animate factory dust only when visible
+    if (isFactoryVisible) {
+      const fPositions = factoryDustGeo.attributes.position.array as Float32Array;
+      for (let i = 0; i < fDustCount; i++) {
+        fPositions[i * 3 + 1] += Math.sin(animTimer + i) * 0.003;
+        if (fPositions[i * 3 + 1] > 8) fPositions[i * 3 + 1] = 0;
+      }
+      factoryDustGeo.attributes.position.needsUpdate = true;
     }
-    factoryDustGeo.attributes.position.needsUpdate = true;
   }
 
   function dispose() {
@@ -441,6 +458,8 @@ export function createSurfaceFactory(
     addGem,
     update,
     dispose,
-    getFinishedCount: () => finishedCount
+    getFinishedCount: () => finishedCount,
+    group: root,
+    setVisible
   };
 }

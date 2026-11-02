@@ -14,6 +14,7 @@ type Upgrades = {
   elevatorSpeed: number;
   headlampOptics?: number;
   scanner: boolean;
+  drillBitTier: number;
 };
 
 type MiningHUDProps = {
@@ -50,6 +51,11 @@ type MiningHUDProps = {
   onOpenSettings: () => void;
   nearOffice: boolean;
   achievementToast: { title: string; description: string; rewardCash: number; icon: string } | null;
+  onRotateCameraLeft?: () => void;
+  onRotateCameraRight?: () => void;
+  onResetCamera?: () => void;
+  onZoomCameraIn?: () => void;
+  onZoomCameraOut?: () => void;
 };
 
 export default function MiningHUD({
@@ -85,7 +91,12 @@ export default function MiningHUD({
   onOpenStatistics,
   onOpenSettings,
   nearOffice,
-  achievementToast
+  achievementToast,
+  onRotateCameraLeft,
+  onRotateCameraRight,
+  onResetCamera,
+  onZoomCameraIn,
+  onZoomCameraOut
 }: MiningHUDProps) {
   const [activeTab, setActiveTab] = useState<"gems" | "upgrades" | "jewelry" | "audio" | "achievements" | "none">("none");
   const [musicActive, setMusicActive] = useState(soundManager.isMusicActive());
@@ -166,10 +177,13 @@ export default function MiningHUD({
     backpack: Math.floor(120 * Math.pow(1.4, Math.floor(backpackCapacity / 10))),
     elevatorSpeed: Math.floor(250 * Math.pow(1.5, Math.round((upgrades.elevatorSpeed - 35) / 5))),
     headlampOptics: Math.floor(200 * Math.pow(1.5, Math.round(((upgrades.headlampOptics || 1.0) - 1) * 2))),
-    scanner: 1000
+    scanner: 1000,
+    drillBitTier: [5000, 25000, 100000][upgrades.drillBitTier] || 1000000
   };
 
-  const formattedRemainingGems = remainingCaveGems >= 1e12 
+  const formattedRemainingGems = remainingCaveGems >= 1e15
+    ? `${(remainingCaveGems / 1e15).toFixed(1)}Q GEMS`
+    : remainingCaveGems >= 1e12 
     ? `${(remainingCaveGems / 1e12).toFixed(1)}T GEMS`
     : remainingCaveGems >= 1e6
     ? `${(remainingCaveGems / 1e6).toFixed(0)}M GEMS`
@@ -346,6 +360,46 @@ export default function MiningHUD({
                   💡 Beam: {Math.round(headlampPower * 100)}%
                 </button>
               )}
+
+              {/* 3rd-Person Camera Quick Orbit & Zoom Controls */}
+              <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-1.5 py-1 shadow-sm">
+                <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider pl-1 mr-0.5 hidden sm:inline">Cam</span>
+                <button
+                  onClick={onRotateCameraLeft}
+                  className="w-7 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
+                  title="Rotate Camera Left (Q)"
+                >
+                  ↺
+                </button>
+                <button
+                  onClick={onResetCamera}
+                  className="px-1.5 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center text-[11px] font-mono font-bold transition-all active:scale-95 border border-slate-700"
+                  title="Reset Camera Behind Player"
+                >
+                  ⟲ Reset
+                </button>
+                <button
+                  onClick={onRotateCameraRight}
+                  className="w-7 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
+                  title="Rotate Camera Right (E)"
+                >
+                  ↻
+                </button>
+                <button
+                  onClick={onZoomCameraIn}
+                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
+                  title="Zoom In (Scroll Up)"
+                >
+                  +
+                </button>
+                <button
+                  onClick={onZoomCameraOut}
+                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
+                  title="Zoom Out (Scroll Down)"
+                >
+                  -
+                </button>
+              </div>
             </>
           )}
 
@@ -727,6 +781,26 @@ export default function MiningHUD({
                     }`}
                   >
                     +100m Beam (${upgradeCosts.headlampOptics})
+                  </button>
+                </div>
+
+                <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700/60 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-100">🛠 Drill Bit Material</div>
+                    <div className="text-xs text-slate-400">
+                      Tier: {["Steel", "Titanium Carbide", "Diamond Core"][upgrades.drillBitTier]}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUpgrade("drillBitTier" as any)}
+                    disabled={cash < upgradeCosts.drillBitTier || upgrades.drillBitTier >= 2}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all ${
+                      cash >= upgradeCosts.drillBitTier && upgrades.drillBitTier < 2
+                        ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950"
+                        : "bg-slate-700 text-slate-500 cursor-not-allowed"
+                    }`}
+                  >
+                    {upgrades.drillBitTier >= 2 ? "MAX TIER" : `UPGRADE ($${upgradeCosts.drillBitTier?.toLocaleString()})`}
                   </button>
                 </div>
               </div>

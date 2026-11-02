@@ -8,7 +8,7 @@ import ManagementModal from "@/components/ManagementModal";
 import EncyclopediaModal from "@/components/EncyclopediaModal";
 import { createSurfaceFactory } from "@/lib/factory-engine";
 import { createJewelryFactory } from "@/lib/jewelry-factory";
-import { GAME_GEMS, GemOreDeposit, GemDrillController, GemType } from "@/lib/gems";
+import { GAME_GEMS, GemOreDeposit, GemDrillController, GemType, getSharedCrystalMaterial } from "@/lib/gems";
 import { soundManager } from "@/lib/audio";
 import { buildMiningWorld } from "@/lib/cave-builder";
 import { managementSystem } from "@/lib/management-system";
@@ -22,10 +22,15 @@ import SettingsModal from "@/components/SettingsModal";
 import StatisticsModal from "@/components/StatisticsModal";
 import LoadingScreen from "@/components/LoadingScreen";
 import { createMaxPowerDrill } from "@/lib/maxpower-drill";
-import { createMegaCaveSystem, MegaCaveSystem } from "@/lib/mega-cave-system";
+import { createMegaCaveSystem, MegaCaveSystem, getSmoothTargetY, MAMMOTH_CAVE_GENERATOR } from "@/lib/mega-cave-system";
 import { createSurfaceWorldSystem, SurfaceWorldSystem } from "@/lib/surface-world-system";
 
 type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
+
+// Module-level reusable math vectors for zero GC in the game render loop
+const _lookAheadPos = new THREE.Vector3();
+const _targetCenter = new THREE.Vector3();
+const _tempCamVec = new THREE.Vector3();
 
 export default function DeepMiningApp() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -54,6 +59,7 @@ export default function DeepMiningApp() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isStatisticsOpen, setIsStatisticsOpen] = useState(false);
   const [isLoadingScreen, setIsLoadingScreen] = useState(true);
+  const [isEngineReady, setIsEngineReady] = useState(false);
   const [totalMinedCount, setTotalMinedCount] = useState(0);
   const [featuredDiscoveredGem, setFeaturedDiscoveredGem] = useState<GemstoneEntry | null>(null);
   const [nearOffice, setNearOffice] = useState(false);
@@ -66,6 +72,77 @@ export default function DeepMiningApp() {
 
   // Clear Screen Toggle
   const [clearScreenMode, setClearScreenMode] = useState(false);
+
+  // Graphics Quality & 3rd-Person Camera Controls
+  const [graphicsQuality, setGraphicsQuality] = useState<"ultra" | "high" | "balanced" | "performance">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("mining_empire_graphics_quality");
+      if (saved === "ultra" || saved === "high" || saved === "balanced" || saved === "performance") {
+        return saved;
+      }
+    }
+    return "high";
+  });
+
+  const [cameraSensitivity, setCameraSensitivity] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("mining_empire_camera_sensitivity");
+      if (saved) {
+        const val = parseFloat(saved);
+        if (!isNaN(val) && val >= 0.4 && val <= 2.5) return val;
+      }
+    }
+    return 1.0;
+  });
+
+  const cameraYawRef = useRef(0);
+  const cameraPitchRef = useRef(0.28);
+  const cameraDistanceRef = useRef(8.5);
+  const cameraSensitivityRef = useRef(cameraSensitivity);
+  const graphicsQualityRef = useRef(graphicsQuality);
+  const currentCamLookAtRef = useRef(new THREE.Vector3(0, 1.2, -6));
+  const accumulatedWagesRef = useRef(0);
+  const lastWageCommitTimeRef = useRef(0);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+
+  useEffect(() => {
+    cameraSensitivityRef.current = cameraSensitivity;
+    if (typeof window !== "undefined") {
+      localStorage.setItem("mining_empire_camera_sensitivity", cameraSensitivity.toString());
+    }
+  }, [cameraSensitivity]);
+
+  useEffect(() => {
+    graphicsQualityRef.current = graphicsQuality;
+    if (typeof window !== "undefined") {
+      localStorage.setItem("mining_empire_graphics_quality", graphicsQuality);
+    }
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    if (renderer && scene) {
+      if (graphicsQuality === "performance") {
+        renderer.setPixelRatio(1.0);
+        renderer.shadowMap.enabled = false;
+        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 280;
+      } else if (graphicsQuality === "balanced") {
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.BasicShadowMap;
+        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 380;
+      } else if (graphicsQuality === "high") {
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 450;
+      } else if (graphicsQuality === "ultra") {
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 600;
+      }
+    }
+  }, [graphicsQuality]);
 
   // 400-Meter High-Power LED Headlamp State
   const [headlampOn, setHeadlampOn] = useState(true);
@@ -99,7 +176,8 @@ export default function DeepMiningApp() {
     backpack: STARTING_BACKPACK_CAPACITY,
     elevatorSpeed: 35.0, // 35 m/s (Faster than Taipei 101's 16.8 m/s!)
     headlampOptics: 1.0, // 400m Base Range Multiplier
-    scanner: false
+    scanner: false,
+    drillBitTier: 0 // 0: Steel, 1: Titanium Carbide, 2: Diamond Core
   });
 
 
@@ -202,6 +280,10 @@ export default function DeepMiningApp() {
       else if (type === "elevatorSpeed") cost = Math.floor(250 * Math.pow(1.5, Math.round((upgrades.elevatorSpeed - 35) / 5)));
       else if (type === "headlampOptics") cost = Math.floor(200 * Math.pow(1.5, Math.round(((upgrades.headlampOptics || 1.0) - 1) * 2)));
       else if (type === "scanner") cost = 1000;
+      else if (type === "drillBitTier") {
+        const tiers = [5000, 25000, 100000];
+        cost = tiers[upgrades.drillBitTier] || 1000000;
+      }
 
       if (prevCash < cost) return prevCash;
 
@@ -223,6 +305,12 @@ export default function DeepMiningApp() {
         } else if (type === "scanner") {
           next.scanner = true;
           drillControllerRef.current.scanner = true;
+        } else if (type === "drillBitTier") {
+          next.drillBitTier = Math.min(2, next.drillBitTier + 1);
+          // Boost power significantly with better bits
+          const powerBoost = next.drillBitTier === 1 ? 15 : 45;
+          next.power += powerBoost;
+          drillControllerRef.current.upgradePower(powerBoost);
         }
         return next;
       });
@@ -345,27 +433,61 @@ export default function DeepMiningApp() {
     );
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
-      powerPreference: "high-performance"
+      antialias: graphicsQualityRef.current !== "performance",
+      powerPreference: "high-performance",
+      precision: "highp"
     });
 
     renderer.setSize(mount.clientWidth, mount.clientHeight);
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 1.5));
-    renderer.shadowMap.enabled = !isSoftwareGl;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    const initialPixelRatio = graphicsQualityRef.current === "ultra"
+      ? Math.min(window.devicePixelRatio, 2.0)
+      : graphicsQualityRef.current === "high"
+      ? Math.min(window.devicePixelRatio, 1.5)
+      : graphicsQualityRef.current === "balanced"
+      ? Math.min(window.devicePixelRatio, 1.25)
+      : 1.0;
+    renderer.setPixelRatio(initialPixelRatio);
+    renderer.shadowMap.enabled = !isSoftwareGl && graphicsQualityRef.current !== "performance";
+    renderer.shadowMap.type = graphicsQualityRef.current === "balanced" ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
 
+    rendererRef.current = renderer;
+    sceneRef.current = scene;
     mount.appendChild(renderer.domElement);
 
     // Studio & Minecraft Ambient Indirect Illumination
-    scene.add(new THREE.HemisphereLight(0x38bdf8, 0x1e1b18, 0.55));
-    const playerLight = new THREE.PointLight(0xffedd5, 20, 25);
+    scene.add(new THREE.HemisphereLight(0x38bdf8, 0x1e1b18, 0.45));
+    const playerLight = new THREE.PointLight(0xffedd5, 15, 30);
     scene.add(playerLight);
+
+    // --- GLOSSY PC/XBOX QUALITY ENVIRONMENT MAPPING ---
+    const envCanvas = document.createElement("canvas");
+    envCanvas.width = 512; envCanvas.height = 256;
+    const envCtx = envCanvas.getContext("2d")!;
+    const envGrad = envCtx.createLinearGradient(0, 0, 0, 256);
+    envGrad.addColorStop(0, "#0c0a09");
+    envGrad.addColorStop(0.4, "#292524");
+    envGrad.addColorStop(0.5, "#44403c");
+    envGrad.addColorStop(0.6, "#292524");
+    envGrad.addColorStop(1, "#0c0a09");
+    envCtx.fillStyle = envGrad;
+    envCtx.fillRect(0, 0, 512, 256);
+    // Add artificial "studio lights" to env map for reflections
+    for (let i = 0; i < 10; i++) {
+        envCtx.fillStyle = "#ffffff";
+        envCtx.globalAlpha = 0.15;
+        envCtx.fillRect(Math.random()*512, Math.random()*256, 40 + Math.random()*80, 20);
+    }
+    const envTex = new THREE.CanvasTexture(envCanvas);
+    envTex.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = envTex;
+    scene.backgroundIntensity = 0.5;
 
     // Build Mine Cave, Ravines & Surface Outpost
     const world = buildMiningWorld(scene);
+
     worldRef.current = world;
 
     // Instantiate Mega Cave System (10.8 Miles Explorable Passages, 455ft Depth, Chunk Streaming)
@@ -569,11 +691,106 @@ export default function DeepMiningApp() {
     joystickContainer.addEventListener("pointerup", handlePointerUp);
     joystickContainer.addEventListener("pointercancel", handlePointerUp);
 
+    // 3rd-Person Orbit Follow Camera Drag & Touch Setup
+    let isCameraDragging = false;
+    let lastCamPointerX = 0;
+    let lastCamPointerY = 0;
+    let activeCamPointerId: number | null = null;
+    let lastPinchDist = 0;
+
+    const handleCanvasPointerDown = (e: PointerEvent) => {
+      const joyRect = joystickContainer.getBoundingClientRect();
+      if (
+        e.clientX >= joyRect.left - 15 &&
+        e.clientX <= joyRect.right + 15 &&
+        e.clientY >= joyRect.top - 15 &&
+        e.clientY <= joyRect.bottom + 15
+      ) {
+        return;
+      }
+
+      isCameraDragging = true;
+      activeCamPointerId = e.pointerId;
+      lastCamPointerX = e.clientX;
+      lastCamPointerY = e.clientY;
+      renderer.domElement.setPointerCapture?.(e.pointerId);
+    };
+
+    const handleCanvasPointerMove = (e: PointerEvent) => {
+      if (!isCameraDragging || (activeCamPointerId !== null && e.pointerId !== activeCamPointerId)) return;
+      const dx = e.clientX - lastCamPointerX;
+      const dy = e.clientY - lastCamPointerY;
+      lastCamPointerX = e.clientX;
+      lastCamPointerY = e.clientY;
+
+      const sens = cameraSensitivityRef.current;
+      cameraYawRef.current -= dx * 0.0055 * sens;
+      cameraPitchRef.current = THREE.MathUtils.clamp(
+        cameraPitchRef.current + dy * 0.0045 * sens,
+        -0.35,
+        0.95
+      );
+    };
+
+    const handleCanvasPointerUp = (e: PointerEvent) => {
+      if (activeCamPointerId === e.pointerId || activeCamPointerId === null) {
+        isCameraDragging = false;
+        activeCamPointerId = null;
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      cameraDistanceRef.current = THREE.MathUtils.clamp(
+        cameraDistanceRef.current + (e.deltaY > 0 ? 0.75 : -0.75),
+        3.8,
+        18.0
+      );
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.hypot(dx, dy);
+        if (lastPinchDist > 0) {
+          const diff = dist - lastPinchDist;
+          cameraDistanceRef.current = THREE.MathUtils.clamp(
+            cameraDistanceRef.current - diff * 0.04,
+            3.8,
+            18.0
+          );
+        }
+        lastPinchDist = dist;
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        lastPinchDist = 0;
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handleCanvasPointerDown);
+    renderer.domElement.addEventListener("pointermove", handleCanvasPointerMove);
+    renderer.domElement.addEventListener("pointerup", handleCanvasPointerUp);
+    renderer.domElement.addEventListener("pointercancel", handleCanvasPointerUp);
+    mount.addEventListener("wheel", handleWheel, { passive: true });
+    mount.addEventListener("touchmove", handleTouchMove, { passive: true });
+    mount.addEventListener("touchend", handleTouchEnd, { passive: true });
+    renderer.domElement.addEventListener("contextmenu", handleContextMenu);
+
     // Keyboard Listeners (WASD / Arrows)
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current[e.key.toLowerCase()] = true;
       if (e.key.toLowerCase() === "f") {
         handleToggleHeadlamp();
+      }
+      if (e.key.toLowerCase() === "q") {
+        cameraYawRef.current += 0.25;
       }
       if (e.key.toLowerCase() === "e") {
         const distToElevator = Math.hypot(playerGroup.position.x, playerGroup.position.z - 2);
@@ -584,6 +801,9 @@ export default function DeepMiningApp() {
           triggerElevator("traveling-up");
         } else if (distToElevator < 3.2 && elevatorStateRef.current === "surface") {
           triggerElevator("traveling-down");
+        } else {
+          // If not interacting, rotate camera right
+          cameraYawRef.current -= 0.25;
         }
       }
     };
@@ -614,38 +834,20 @@ export default function DeepMiningApp() {
       playerGroup.rotation.y = 0;
     }
 
-    // Function to render 3D Backpack Gem Tower
+    // Function to render 3D Backpack Gem Tower with pooled meshes and shared materials
+    const sharedTowerGeo = new THREE.OctahedronGeometry(0.14, 1);
+    const towerMeshes: THREE.Mesh[] = [];
     let currentRenderedGemCount = -1;
+
     function updateBackpackGemTower(totalGems: number) {
       if (totalGems === currentRenderedGemCount) return;
       currentRenderedGemCount = totalGems;
 
-      while (backpackTowerGroup.children.length > 0) {
-        const child = backpackTowerGroup.children[0];
-        backpackTowerGroup.remove(child);
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          (child.material as THREE.Material).dispose();
-        }
-      }
-
-      for (let i = 0; i < totalGems; i++) {
+      // Expand mesh pool as needed
+      while (towerMeshes.length < totalGems) {
+        const i = towerMeshes.length;
         const gemConfig = GAME_GEMS[i % GAME_GEMS.length];
-        const gemMesh = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.14, 1),
-          new THREE.MeshPhysicalMaterial({
-            color: gemConfig.color,
-            emissive: gemConfig.color,
-            emissiveIntensity: 0.8,
-            roughness: 0.05,
-            metalness: 0.15,
-            transmission: 0.82,
-            ior: 1.58,
-            thickness: 0.6,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.08
-          })
-        );
+        const gemMesh = new THREE.Mesh(sharedTowerGeo, getSharedCrystalMaterial(gemConfig));
         gemMesh.position.set(
           ((i % 2) - 0.5) * 0.08,
           i * 0.14,
@@ -653,6 +855,12 @@ export default function DeepMiningApp() {
         );
         gemMesh.rotation.set(0.2, i * 0.5, 0.2);
         backpackTowerGroup.add(gemMesh);
+        towerMeshes.push(gemMesh);
+      }
+
+      // Fast visibility toggling on pooled meshes
+      for (let i = 0; i < towerMeshes.length; i++) {
+        towerMeshes[i].visible = i < totalGems;
       }
     }
 
@@ -761,31 +969,58 @@ export default function DeepMiningApp() {
       }
 
       // --------------------------------------------------
-      // 2. JOYSTICK & KEYBOARD LOCOMOTION WITH LADDER CLIMBING
+      // 2. CAMERA-RELATIVE JOYSTICK & KEYBOARD LOCOMOTION
       // --------------------------------------------------
-      let moveX = joyX;
-      let moveZ = joyY;
+      const camYaw = cameraYawRef.current;
+      const fwdX = -Math.sin(camYaw);
+      const fwdZ = -Math.cos(camYaw);
+      const rightX = Math.cos(camYaw);
+      const rightZ = -Math.sin(camYaw);
 
-      if (keys["w"] || keys["arrowup"]) moveZ -= 1;
-      if (keys["s"] || keys["arrowdown"]) moveZ += 1;
-      if (keys["a"] || keys["arrowleft"]) moveX -= 1;
-      if (keys["d"] || keys["arrowright"]) moveX += 1;
+      let inputX = joyX;
+      let inputZ = joyY;
 
-      const inputLen = Math.hypot(moveX, moveZ);
-      const isMoving = inputLen > 0.1 && (state === "mine" || state === "surface");
+      if (keys["w"] || keys["arrowup"]) inputZ -= 1;
+      if (keys["s"] || keys["arrowdown"]) inputZ += 1;
+      if (keys["a"] || keys["arrowleft"]) inputX -= 1;
+      if (keys["d"] || keys["arrowright"]) inputX += 1;
+
+      const rawInputLen = Math.hypot(inputX, inputZ);
+      const isMoving = rawInputLen > 0.08 && (state === "mine" || state === "surface");
 
       if (isMoving) {
-        const normX = moveX / Math.max(1, inputLen);
-        const normZ = moveZ / Math.max(1, inputLen);
+        const clampedInputLen = Math.min(1, rawInputLen);
+        const normInputX = inputX / rawInputLen;
+        const normInputZ = inputZ / rawInputLen;
 
-        playerGroup.position.x += normX * dt * 5.8;
-        playerGroup.position.z += normZ * dt * 5.8;
-        playerGroup.rotation.y = THREE.MathUtils.damp(
-          playerGroup.rotation.y,
-          Math.atan2(normX, normZ),
-          14,
-          dt
-        );
+        // Camera-relative world motion direction
+        const worldDirX = rightX * normInputX + fwdX * (-normInputZ);
+        const worldDirZ = rightZ * normInputX + fwdZ * (-normInputZ);
+
+        const moveSpeed = 5.8;
+        const targetX = playerGroup.position.x + worldDirX * dt * moveSpeed * clampedInputLen;
+        const targetZ = playerGroup.position.z + worldDirZ * dt * moveSpeed * clampedInputLen;
+        
+        // --- LOOK AHEAD COLLISION ---
+        const targetPos = new THREE.Vector3(targetX, playerGroup.position.y, targetZ);
+        const targetGroundY = state === "mine" 
+          ? megaCaveSystem.getGroundHeight(targetPos)
+          : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0);
+          
+        const heightDiff = targetGroundY - playerGroup.position.y;
+        const isWall = heightDiff > 0.65; 
+        
+        if (!isWall || keys["g"]) {
+          playerGroup.position.x = targetX;
+          playerGroup.position.z = targetZ;
+        }
+
+        // Shortest-path player orientation facing the exact direction of travel
+        const targetRotY = Math.atan2(worldDirX, -worldDirZ);
+        let rotDiff = targetRotY - playerGroup.rotation.y;
+        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+        playerGroup.rotation.y += rotDiff * Math.min(1, 14 * dt);
       }
 
       // Update World Chunk Streaming based on player position
@@ -793,26 +1028,43 @@ export default function DeepMiningApp() {
       surfaceSystemRef.current?.update(playerGroup.position, dt);
       const activeDeposits = [...world.deposits, ...megaCaveSystem.getDeposits()];
 
-      // Ground Snapping and Region Navigation
+      // ADVANCED GROUND COLLISION & STEP-UP LOGIC
       if (state === "mine" || state === "surface") {
-        const groundY = state === "mine" 
-          ? megaCaveSystem.getGroundHeight(playerGroup.position)
-          : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
-        
-        const isGrounded = playerGroup.position.y <= groundY + 0.05;
+            const groundY = state === "mine" 
+              ? megaCaveSystem.getGroundHeight(playerGroup.position)
+              : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
+            
+            const isFlying = keys["g"];
+            const isGrounded = playerGroup.position.y <= groundY + 0.1;
 
-        // Jump mechanic - Space key
-        if (keys[" "] && isGrounded) {
-            playerGroup.position.y += 0.2; // Small boost
-        }
+            if (isFlying) {
+                // Jetpack Flight: Move up/down while G is held
+                if (keys["w"] || keys["arrowup"] || keys["arrowleft"] || keys["arrowright"] || keys["s"] || keys["arrowdown"]) {
+                    playerGroup.position.y += dt * 8.5; 
+                }
+                // Altitude safety cap
+                playerGroup.position.y = Math.min(playerGroup.position.y, groundY + 150);
+            } else {
+                // Jump mechanic - Space key
+                if (keys[" "] && isGrounded) {
+                    playerGroup.position.y += 0.45; // Enhanced jump impulse
+                }
 
-        // Rigid snapping: instant stop if sinking below ground, smooth damp if above
-        if (playerGroup.position.y < groundY) {
-            playerGroup.position.y = groundY;
-        } else {
-            // Support "Jump" or climbing by damping if above ground
-            playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, 12, dt);
-        }
+                // RIGID GROUND CONSTRAINT with Step-Up support
+                if (playerGroup.position.y < groundY) {
+                    // Force snap to ground if below it
+                    playerGroup.position.y = groundY;
+                } else if (playerGroup.position.y > groundY) {
+                    // Gravity damping
+                    const fallSpeed = isGrounded ? 32 : 18; // Snap faster when close to ground
+                    playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, fallSpeed, dt);
+                }
+                
+                // Final micro-snap to eliminate jitter on slopes
+                if (Math.abs(playerGroup.position.y - groundY) < 0.05) {
+                    playerGroup.position.y = groundY;
+                }
+            }
 
         if (state === "mine") {
             const regionInfo = megaCaveSystem.getRegionInfo(playerGroup.position);
@@ -820,7 +1072,7 @@ export default function DeepMiningApp() {
             setDepthGuarded(regionInfo.depthFeet);
         } else {
             if (playerGroup.position.z < 130) setLocationGuarded("Surface Mining Outpost & Original Factory");
-            else setLocationGuarded("Expanded Surface Wilderness & Mining Expansions");
+            else setLocationGuarded("Infinite Surface Wilderness Exploration");
         }
       }
 
@@ -934,11 +1186,10 @@ export default function DeepMiningApp() {
       // 4. LOOSE GEM DROPS, REGENERATION & AUTOMATIC PICKUP
       // --------------------------------------------------
       let currentTotalGemsInBackpack = 0;
-      activeDeposits.forEach(d => {
-        Object.values(d.getInventory()).forEach(cnt => {
-          currentTotalGemsInBackpack += cnt;
-        });
-      });
+      // Faster sum of inventory
+      for (const [_, count] of Object.entries(inventory)) {
+        currentTotalGemsInBackpack += count;
+      }
 
       let anyPickedUp = false;
       for (const deposit of activeDeposits) {
@@ -975,14 +1226,59 @@ export default function DeepMiningApp() {
       updateBackpackGemTower(currentTotalGemsInBackpack);
 
       // --------------------------------------------------
-      // 5. CAMERA & SCENE RENDER
+      // 5. SILKY SMOOTH 3RD-PERSON ORBIT FOLLOW CAMERA
       // --------------------------------------------------
-      const camOffset = state === "mine"
-        ? new THREE.Vector3(playerGroup.position.x, playerGroup.position.y + 5.5, playerGroup.position.z + 9)
-        : new THREE.Vector3(playerGroup.position.x, 8.0, playerGroup.position.z + 12);
+      const targetCenter = new THREE.Vector3(
+        playerGroup.position.x,
+        playerGroup.position.y + 1.25,
+        playerGroup.position.z
+      );
 
-      camera.position.lerp(camOffset, 0.08);
-      camera.lookAt(playerGroup.position.x, playerGroup.position.y + 1.2, playerGroup.position.z);
+      const pitch = THREE.MathUtils.clamp(cameraPitchRef.current, -0.35, 0.95);
+      const dist = THREE.MathUtils.clamp(cameraDistanceRef.current, 3.8, 18.0);
+      const horizDist = dist * Math.cos(pitch);
+      const vertDist = dist * Math.sin(pitch);
+
+      const offX = horizDist * Math.sin(camYaw);
+      const offZ = horizDist * Math.cos(camYaw);
+      const offY = vertDist;
+
+      let targetCamX = targetCenter.x + offX;
+      let targetCamY = targetCenter.y + offY + (state === "mine" ? 1.0 : 1.8);
+      let targetCamZ = targetCenter.z + offZ;
+
+      // Ground & ceiling collision checks to prevent camera clipping
+      if (state === "mine") {
+        const groundAtCam = megaCaveSystem.getGroundHeight(new THREE.Vector3(targetCamX, 0, targetCamZ)) + 0.85;
+        if (targetCamY < groundAtCam) targetCamY = groundAtCam;
+
+        const baseElev = MAMMOTH_CAVE_GENERATOR.getBaseElevation(targetCamX, targetCamZ);
+        const carving = MAMMOTH_CAVE_GENERATOR.getCarving(targetCamX, targetCamZ);
+        const smoothY = getSmoothTargetY(targetCamZ);
+        const ceilAtCam = smoothY + baseElev + Math.max(0.15, carving) * MAMMOTH_CAVE_GENERATOR.baseHeight - 0.85;
+        if (targetCamY > ceilAtCam) targetCamY = ceilAtCam;
+      } else {
+        const groundAtCam = (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(new THREE.Vector3(targetCamX, 0, targetCamZ)) : 0) + 1.0;
+        if (targetCamY < groundAtCam) targetCamY = groundAtCam;
+      }
+
+      // Drilling Camera Shake
+      if (autoDrilling) {
+        const shake = 0.035;
+        targetCamX += (Math.random() - 0.5) * shake;
+        targetCamY += (Math.random() - 0.5) * shake;
+        targetCamZ += (Math.random() - 0.5) * shake;
+      }
+
+      camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamX, 10, dt);
+      camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamY, 10, dt);
+      camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamZ, 10, dt);
+
+      currentCamLookAtRef.current.x = THREE.MathUtils.damp(currentCamLookAtRef.current.x, targetCenter.x, 14, dt);
+      currentCamLookAtRef.current.y = THREE.MathUtils.damp(currentCamLookAtRef.current.y, targetCenter.y, 14, dt);
+      currentCamLookAtRef.current.z = THREE.MathUtils.damp(currentCamLookAtRef.current.z, targetCenter.z, 14, dt);
+
+      camera.lookAt(currentCamLookAtRef.current);
       playerLight.position.set(playerGroup.position.x, playerGroup.position.y + 4.5, playerGroup.position.z);
 
       // Update 400-Meter Dual Spotlight Headlamp parameters
@@ -1019,14 +1315,20 @@ export default function DeepMiningApp() {
         }
       }
 
-      // Worker Wages deduction & financial rate calculation
+      // Worker Wages deduction & financial rate calculation (Throttled to eliminate 60 FPS React re-renders)
       const wageDeduction = managementSystem.tickWages(dt);
-      if (wageDeduction > 0) {
-        setCash(prev => {
-          const next = Math.max(0, prev - wageDeduction);
-          cashRef.current = next;
-          return next;
-        });
+      accumulatedWagesRef.current += wageDeduction;
+      if (accumulatedWagesRef.current >= 1.0 || (now - lastWageCommitTimeRef.current > 1000 && accumulatedWagesRef.current > 0.05)) {
+        const toDeduct = Math.floor(accumulatedWagesRef.current);
+        if (toDeduct > 0) {
+          accumulatedWagesRef.current -= toDeduct;
+          lastWageCommitTimeRef.current = now;
+          setCash(prev => {
+            const next = Math.max(0, prev - toDeduct);
+            cashRef.current = next;
+            return next;
+          });
+        }
       }
 
       // Periodic Achievements & Milestone Check (Every 500ms)
@@ -1056,6 +1358,10 @@ export default function DeepMiningApp() {
       world.updateWorld(dt);
       managementOffice.update(dt);
       workerRenderer.update(dt);
+      
+      // Update global rock debris fragments
+      GemOreDeposit.updateGlobalDebris(dt);
+
 
       // Business upgrade multipliers applied to factory processing lines
       const conveyorMult = managementSystem.getConveyorSpeedMultiplier();
@@ -1065,17 +1371,11 @@ export default function DeepMiningApp() {
         jewelryFactoryRef.current.update(dt * machineMult);
       }
       renderer.render(scene, camera);
-
-      if (isSoftwareGl) {
-        setTimeout(() => {
-          animationFrameId = requestAnimationFrame(animate);
-        }, 30);
-      } else {
-        animationFrameId = requestAnimationFrame(animate);
-      }
+      animationFrameId = requestAnimationFrame(animate);
     };
 
     animationFrameId = requestAnimationFrame(animate);
+    setIsEngineReady(true);
 
     // Resize Handler
     const handleResize = () => {
@@ -1097,6 +1397,18 @@ export default function DeepMiningApp() {
       joystickContainer.removeEventListener("pointermove", handlePointerMove);
       joystickContainer.removeEventListener("pointerup", handlePointerUp);
       joystickContainer.removeEventListener("pointercancel", handlePointerUp);
+
+      renderer.domElement.removeEventListener("pointerdown", handleCanvasPointerDown);
+      renderer.domElement.removeEventListener("pointermove", handleCanvasPointerMove);
+      renderer.domElement.removeEventListener("pointerup", handleCanvasPointerUp);
+      renderer.domElement.removeEventListener("pointercancel", handleCanvasPointerUp);
+      mount.removeEventListener("wheel", handleWheel);
+      mount.removeEventListener("touchmove", handleTouchMove);
+      mount.removeEventListener("touchend", handleTouchEnd);
+      renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
+
+      rendererRef.current = null;
+      sceneRef.current = null;
 
       renderer.dispose();
       world.disposeWorld();
@@ -1183,6 +1495,22 @@ export default function DeepMiningApp() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         nearOffice={nearOffice}
         achievementToast={achievementToast}
+        onRotateCameraLeft={() => {
+          cameraYawRef.current += 0.35;
+        }}
+        onRotateCameraRight={() => {
+          cameraYawRef.current -= 0.35;
+        }}
+        onResetCamera={() => {
+          cameraYawRef.current = 0;
+          cameraPitchRef.current = 0.28;
+        }}
+        onZoomCameraIn={() => {
+          cameraDistanceRef.current = Math.max(3.8, cameraDistanceRef.current - 1.2);
+        }}
+        onZoomCameraOut={() => {
+          cameraDistanceRef.current = Math.min(18.0, cameraDistanceRef.current + 1.2);
+        }}
       />
 
       {/* Corporate Executive Management Headquarters Modal */}
@@ -1229,6 +1557,10 @@ export default function DeepMiningApp() {
           window.location.reload();
         }}
         onTeleportToElevator={handleTeleportToElevator}
+        graphicsQuality={graphicsQuality}
+        onGraphicsQualityChange={(q) => setGraphicsQuality(q)}
+        cameraSensitivity={cameraSensitivity}
+        onCameraSensitivityChange={(s) => setCameraSensitivity(s)}
       />
 
       {/* First-Time Player Tutorial Modal */}
@@ -1241,6 +1573,7 @@ export default function DeepMiningApp() {
       {/* Professional Loading Screen */}
       <LoadingScreen
         isLoading={isLoadingScreen}
+        isEngineReady={isEngineReady}
         onEnterGame={() => setIsLoadingScreen(false)}
       />
     </div>

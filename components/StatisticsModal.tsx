@@ -39,9 +39,9 @@ export default function StatisticsModal({
     { label: "Net Profit Rate", value: `$${stats.netProfitRate}/min`, icon: "📈", color: "text-emerald-400" },
     { label: "Gem Encyclopedia Discoveries", value: `${discoveredGems.length} / 8`, icon: "📖", color: "text-purple-400" },
     { label: "Achievements Unlocked", value: `${unlockedAchievementsCount} / ${achievements.length}`, icon: "🏆", color: "text-amber-300" },
-    { label: "Mammoth Cave Gem System", value: "8,500 Trillion", icon: "🌋", color: "text-cyan-300" },
-    { label: "Mathematical Surface Density", value: "1.2 gems/m³", icon: "💎", color: "text-emerald-400" },
-    { label: "Mammoth Cavern Multiplier", value: "88x88x88 Infinite Scale", icon: "🗺️", color: "text-indigo-400" },
+    { label: "Mammoth Cave Gem Target", value: "8.5 Quadrillion", icon: "🌋", color: "text-cyan-300" },
+    { label: "Exploration Verticality", value: "1,210 Feet", icon: "📏", color: "text-indigo-300" },
+    { label: "Procedural Expansion", value: "88x88x88x88 Infinite", icon: "🗺️", color: "text-indigo-400" },
     { label: "Operational Factory Machines", value: "24 Active", icon: "⚙️", color: "text-slate-200" }
   ];
 

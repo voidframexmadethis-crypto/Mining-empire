@@ -1,6 +1,6 @@
 {
-  "name": "Deep Gem Mine 3D",
-  "description": "Hyper-speed elevator deep mining simulator with crystal drill, voxel ore deposits, and gem factory.",
+  "name": "Mining Empire",
+  "description": "Ultra-realistic 3D mining empire with massive underground caverns, lush vegetation, and 8500 trillion gems.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

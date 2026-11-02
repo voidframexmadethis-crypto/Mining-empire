@@ -9,6 +9,7 @@ export type SurfaceRegionInfo = {
 export type SurfaceWorldSystem = {
   update: (playerPos: THREE.Vector3, dt: number) => void;
   getGroundHeight: (pos: THREE.Vector3) => number;
+  setVisible: (visible: boolean) => void;
   dispose: () => void;
 };
 
@@ -16,12 +17,15 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
   const CHUNK_SIZE = 100; // Larger chunks for surface
   const RENDER_RADIUS = 2;
   const loadedChunks = new Map<string, THREE.Group>();
+  let isSystemVisible = true;
 
   const grassMat = new THREE.MeshStandardMaterial({ color: 0x4b7833, roughness: 0.8 });
   const bridgeMat = new THREE.MeshStandardMaterial({ color: 0x4d3319, roughness: 0.9 });
 
   function getGroundHeight(pos: THREE.Vector3): number {
-    return MAMMOTH_CAVE_GENERATOR.getNoiseElevation(pos.x, pos.z) * 0.5; // Smoother on surface
+    const base = MAMMOTH_CAVE_GENERATOR.getBaseElevation(pos.x, pos.z);
+    const detail = MAMMOTH_CAVE_GENERATOR.getFloorDetail(pos.x, pos.z);
+    return (base + detail) * 0.4; // Smoother on surface
   }
 
   function generateChunk(cz: number, cx: number): THREE.Group {
@@ -56,7 +60,7 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
   }
 
   function update(playerPos: THREE.Vector3, dt: number) {
-      if (playerPos.z < 360) return; // Only stream beyond original boundary
+      if (!isSystemVisible || playerPos.z < 360) return; // Only stream beyond original boundary when visible
 
       const currentCZ = Math.floor((playerPos.z + CHUNK_SIZE / 2) / CHUNK_SIZE);
       const currentCX = Math.floor((playerPos.x + CHUNK_SIZE / 2) / CHUNK_SIZE);
@@ -69,7 +73,9 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
           const key = `${cz}_${cx}`;
           neededKeys.add(key);
           if (!loadedChunks.has(key)) {
-            loadedChunks.set(key, generateChunk(cz, cx));
+            const chunk = generateChunk(cz, cx);
+            chunk.visible = isSystemVisible;
+            loadedChunks.set(key, chunk);
           }
         }
       }
@@ -77,15 +83,37 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
       for (const [key, chunk] of loadedChunks.entries()) {
           if (!neededKeys.has(key)) {
               scene.remove(chunk);
+              chunk.traverse((obj) => {
+                if (obj instanceof THREE.Mesh) {
+                  obj.geometry?.dispose();
+                }
+              });
               loadedChunks.delete(key);
           }
       }
   }
 
-  function dispose() {
-      for (const chunk of loadedChunks.values()) scene.remove(chunk);
-      loadedChunks.clear();
+  function setVisible(val: boolean) {
+    if (isSystemVisible === val) return;
+    isSystemVisible = val;
+    for (const chunk of loadedChunks.values()) {
+      chunk.visible = val;
+    }
   }
 
-  return { update, getGroundHeight, dispose };
+  function dispose() {
+      for (const chunk of loadedChunks.values()) {
+        scene.remove(chunk);
+        chunk.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry?.dispose();
+          }
+        });
+      }
+      loadedChunks.clear();
+      grassMat.dispose();
+      bridgeMat.dispose();
+  }
+
+  return { update, getGroundHeight, setVisible, dispose };
 }

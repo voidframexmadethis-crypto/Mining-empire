@@ -26,6 +26,8 @@ export type IndustrialDistrictEngine = {
   dispose(): void;
   getJewelryInventory(): Record<string, number>;
   sellJewelry(productId: string): number;
+  group: THREE.Group;
+  setVisible(visible: boolean): void;
 };
 
 export type IndustrialDistrictOptions = {
@@ -237,70 +239,87 @@ export function createIndustrialDistrict(
     const dt = Math.min(delta, 0.05);
     animTimer += dt;
 
-    rotatingParts.forEach(part => {
-      part.rotation.y += dt * 5;
-    });
+    let isDistrictVisible = true;
+    function setVisible(val: boolean) {
+      if (isDistrictVisible === val) return;
+      isDistrictVisible = val;
+      root.visible = val;
+    }
 
-    for (let i = activePipelineGems.length - 1; i >= 0; i--) {
-      const g = activePipelineGems[i];
-      // Move along industrial district conveyor route
-      if (g.z < -25) {
-        g.z += dt * g.speed;
-      } else if (g.x > -25) {
-        g.x -= dt * g.speed;
-      } else if (g.z < 35) {
-        g.z += dt * g.speed;
-      } else {
-        g.x += dt * g.speed;
+    function update(delta: number) {
+      const dt = Math.min(delta, 0.05);
+      animTimer += dt;
+
+      if (isDistrictVisible) {
+        rotatingParts.forEach(part => {
+          part.rotation.y += dt * 5;
+        });
       }
 
-      g.mesh.position.set(g.x, 1.2, g.z);
-      g.mesh.rotation.y += dt * 4;
+      for (let i = activePipelineGems.length - 1; i >= 0; i--) {
+        const g = activePipelineGems[i];
+        // Move along industrial district conveyor route
+        if (g.z < -25) {
+          g.z += dt * g.speed;
+        } else if (g.x > -25) {
+          g.x -= dt * g.speed;
+        } else if (g.z < 35) {
+          g.z += dt * g.speed;
+        } else {
+          g.x += dt * g.speed;
+        }
 
-      // Reached Retail District / Shipping Depot (Complete)
-      if (g.x >= 10 && g.z >= 35) {
-        root.remove(g.mesh);
-        g.mesh.geometry.dispose();
-        (g.mesh.material as THREE.Material).dispose();
-        activePipelineGems.splice(i, 1);
+        if (isDistrictVisible) {
+          g.mesh.position.set(g.x, 1.2, g.z);
+          g.mesh.rotation.y += dt * 4;
+        }
 
-        const matchingProduct = JEWELRY_PRODUCTS[Math.floor(Math.random() * JEWELRY_PRODUCTS.length)];
-        jewelryInventory[matchingProduct.id] = (jewelryInventory[matchingProduct.id] ?? 0) + 1;
+        // Reached Retail District / Shipping Depot (Complete)
+        if (g.x >= 10 && g.z >= 35) {
+          root.remove(g.mesh);
+          g.mesh.geometry.dispose();
+          (g.mesh.material as THREE.Material).dispose();
+          activePipelineGems.splice(i, 1);
 
-        soundManager.playCashRegister();
-        options.onJewelryManufactured?.(matchingProduct);
+          const matchingProduct = JEWELRY_PRODUCTS[Math.floor(Math.random() * JEWELRY_PRODUCTS.length)];
+          jewelryInventory[matchingProduct.id] = (jewelryInventory[matchingProduct.id] ?? 0) + 1;
+
+          soundManager.playCashRegister();
+          options.onJewelryManufactured?.(matchingProduct);
+        }
       }
     }
+
+    function sellJewelry(productId: string): number {
+      const count = jewelryInventory[productId] ?? 0;
+      if (count <= 0) return 0;
+
+      const product = JEWELRY_PRODUCTS.find(p => p.id === productId);
+      if (!product) return 0;
+
+      jewelryInventory[productId] = count - 1;
+      soundManager.playCashRegister();
+      return product.price;
+    }
+
+    function dispose() {
+      scene.remove(root);
+      root.traverse(obj => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach(m => m.dispose());
+        }
+      });
+    }
+
+    return {
+      addProcessedGem,
+      update,
+      dispose,
+      getJewelryInventory: () => ({ ...jewelryInventory }),
+      sellJewelry,
+      group: root,
+      setVisible
+    };
   }
-
-  function sellJewelry(productId: string): number {
-    const count = jewelryInventory[productId] ?? 0;
-    if (count <= 0) return 0;
-
-    const product = JEWELRY_PRODUCTS.find(p => p.id === productId);
-    if (!product) return 0;
-
-    jewelryInventory[productId] = count - 1;
-    soundManager.playCashRegister();
-    return product.price;
-  }
-
-  function dispose() {
-    scene.remove(root);
-    root.traverse(obj => {
-      if (obj instanceof THREE.Mesh) {
-        obj.geometry.dispose();
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-        mats.forEach(m => m.dispose());
-      }
-    });
-  }
-
-  return {
-    addProcessedGem,
-    update,
-    dispose,
-    getJewelryInventory: () => ({ ...jewelryInventory }),
-    sellJewelry
-  };
-}

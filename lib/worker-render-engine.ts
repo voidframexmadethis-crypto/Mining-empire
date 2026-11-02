@@ -5,6 +5,8 @@ export type WorkerRenderer = {
   updateWorkers(workers: Worker[]): void;
   update(delta: number): void;
   dispose(): void;
+  group: THREE.Group;
+  setVisible(visible: boolean): void;
 };
 
 // Facility machine coordinates in the surface industrial world
@@ -163,6 +165,10 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
       root.remove(child);
       child.traverse(obj => {
         if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        if (obj instanceof THREE.Sprite) {
+          obj.material.map?.dispose();
+          obj.material.dispose();
+        }
       });
     }
     workerMeshes.length = 0;
@@ -195,7 +201,15 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
     });
   }
 
+  let isWorkersVisible = true;
+  function setVisible(val: boolean) {
+    if (isWorkersVisible === val) return;
+    isWorkersVisible = val;
+    root.visible = val;
+  }
+
   function update(delta: number) {
+    if (!isWorkersVisible || workerMeshes.length === 0) return;
     const time = performance.now() * 0.003;
     workerMeshes.forEach(w => {
       // Work animation: arm movement + subtle breathing/inspecting motion
@@ -206,6 +220,17 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
   }
 
   function dispose() {
+    while (root.children.length > 0) {
+      const child = root.children[0];
+      root.remove(child);
+      child.traverse(obj => {
+        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        if (obj instanceof THREE.Sprite) {
+          obj.material.map?.dispose();
+          obj.material.dispose();
+        }
+      });
+    }
     scene.remove(root);
     beginnerSuit.dispose();
     experiencedSuit.dispose();
@@ -220,6 +245,8 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
   return {
     updateWorkers,
     update,
-    dispose
+    dispose,
+    group: root,
+    setVisible
   };
 }

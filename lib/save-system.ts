@@ -15,6 +15,7 @@ export type GameSaveState = {
     elevatorSpeed: number;
     headlampOptics?: number;
     scanner: boolean;
+    drillBitTier: number;
   };
   hasCompletedTutorial: boolean;
   savedAt: string;

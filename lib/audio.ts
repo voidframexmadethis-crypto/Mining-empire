@@ -155,13 +155,13 @@ class SoundManager {
 
       // --- PROCEDURAL NOTE SCHEDULER ---
       const countryPatterns = [
-        { bass: 73.42, notes: [146.83, 185.0, 220.0, 293.66, 369.99] }, // D Major
-        { bass: 98.0, notes: [196.0, 246.94, 293.66, 392.0, 493.88] }, // G Major
-        { bass: 110.0, notes: [220.0, 277.18, 329.63, 440.0, 554.37] }, // A Major
-        { bass: 73.42, notes: [146.83, 220.0, 293.66, 369.99, 440.0] }  // D resolution
+        { bass: 73.42, notes: [146.83, 185.0, 220.0, 293.66, 369.99, 440.0] }, // D Major High
+        { bass: 98.0, notes: [196.0, 246.94, 293.66, 392.0, 493.88, 587.33] }, // G Major
+        { bass: 110.0, notes: [220.0, 277.18, 329.63, 440.0, 554.37, 659.25] }, // A Major
+        { bass: 73.42, notes: [146.83, 220.0, 293.66, 185.0, 440.0, 369.99] }  // D Folk Variation
       ];
 
-      const caveCrystalPitches = [329.63, 392.0, 493.88, 587.33, 659.25, 783.99, 987.77];
+      const caveCrystalPitches = [164.81, 196.0, 220.0, 246.94, 329.63, 392.0, 493.88]; // Deeper, more somber
       const jewelryChimes = [554.37, 659.25, 739.99, 880.0, 987.77, 1108.73];
 
       this.stepCounter = 0;
@@ -170,64 +170,88 @@ class SoundManager {
         const curTime = this.ctx.currentTime;
         const activeZone = this.currentMusicZone;
 
-        // A. SURFACE: Country Guitar & Banjo
+        // A. SURFACE: Country Instrumental (Guitar/Banjo vibe)
         if (activeZone === "surface" && this.surfaceGain) {
           const patternIdx = Math.floor(this.stepCounter / 8) % countryPatterns.length;
           const subStep = this.stepCounter % 8;
           const pattern = countryPatterns[patternIdx];
 
-          // Bass Note on 1 and 5
+          // Alternating Bass (1 and 5)
           if (subStep === 0 || subStep === 4) {
             const bOsc = this.ctx.createOscillator();
             const bGain = this.ctx.createGain();
             bOsc.type = "triangle";
-            bOsc.frequency.setValueAtTime(pattern.bass, curTime);
-            bGain.gain.setValueAtTime(0.24, curTime);
-            bGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.35);
+            bOsc.frequency.setValueAtTime(subStep === 0 ? pattern.bass : pattern.bass * 1.5, curTime);
+            bGain.gain.setValueAtTime(0.3, curTime);
+            bGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.4);
             bOsc.connect(bGain);
             bGain.connect(this.surfaceGain);
             bOsc.start(curTime);
-            bOsc.stop(curTime + 0.35);
+            bOsc.stop(curTime + 0.4);
           }
 
-          // Plucked acoustic string
+          // Plucked acoustic string (Banjo/Guitar style)
           const noteFreq = pattern.notes[subStep % pattern.notes.length];
-          const gOsc = this.ctx.createOscillator();
-          const gGain = this.ctx.createGain();
-          const gFilter = this.ctx.createBiquadFilter();
-          gOsc.type = "sawtooth";
-          if (subStep === 6) {
-            gOsc.frequency.setValueAtTime(noteFreq * 0.94, curTime);
-            gOsc.frequency.exponentialRampToValueAtTime(noteFreq, curTime + 0.08);
-          } else {
-            gOsc.frequency.setValueAtTime(noteFreq, curTime);
+          if (subStep % 2 === 0 || Math.random() < 0.4) {
+            const gOsc = this.ctx.createOscillator();
+            const gGain = this.ctx.createGain();
+            const gFilter = this.ctx.createBiquadFilter();
+            gOsc.type = "sawtooth";
+            
+            // Subtle pitch slide for country feel
+            if (subStep === 2 || subStep === 6) {
+                gOsc.frequency.setValueAtTime(noteFreq * 0.95, curTime);
+                gOsc.frequency.exponentialRampToValueAtTime(noteFreq, curTime + 0.05);
+            } else {
+                gOsc.frequency.setValueAtTime(noteFreq, curTime);
+            }
+
+            gFilter.type = "lowpass";
+            gFilter.frequency.setValueAtTime(3200, curTime);
+            gFilter.frequency.exponentialRampToValueAtTime(800, curTime + 0.2);
+            
+            gGain.gain.setValueAtTime(0.22, curTime);
+            gGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.25);
+            
+            gOsc.connect(gFilter);
+            gFilter.connect(gGain);
+            gGain.connect(this.surfaceGain);
+            gOsc.start(curTime);
+            gOsc.stop(curTime + 0.25);
           }
-          gFilter.type = "lowpass";
-          gFilter.frequency.setValueAtTime(2600, curTime);
-          gFilter.frequency.exponentialRampToValueAtTime(450, curTime + 0.22);
-          gGain.gain.setValueAtTime(0.18, curTime);
-          gGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.28);
-          gOsc.connect(gFilter);
-          gFilter.connect(gGain);
-          gGain.connect(this.surfaceGain);
-          gOsc.start(curTime);
-          gOsc.stop(curTime + 0.28);
         }
 
-        // B. CAVE: Mystical Resonant Crystal Chimes & Water Drop
+        // B. CAVE: Dark Atmospheric Cavern (Deep Drones & Crystal Echoes)
         else if (activeZone === "cave" && this.caveGain) {
-          if (this.stepCounter % 4 === 0 && Math.random() < 0.65) {
+          // Low frequency "water drop" pulse
+          if (this.stepCounter % 16 === 0) {
+              const dOsc = this.ctx.createOscillator();
+              const dGain = this.ctx.createGain();
+              dOsc.frequency.setValueAtTime(45, curTime);
+              dOsc.frequency.exponentialRampToValueAtTime(20, curTime + 0.8);
+              dGain.gain.setValueAtTime(0.4, curTime);
+              dGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 0.8);
+              dOsc.connect(dGain);
+              dGain.connect(this.caveGain);
+              dOsc.start(curTime);
+              dOsc.stop(curTime + 0.8);
+          }
+
+          if (this.stepCounter % 4 === 0 && Math.random() < 0.5) {
             const cFreq = caveCrystalPitches[Math.floor(Math.random() * caveCrystalPitches.length)];
             const cOsc = this.ctx.createOscillator();
             const cGain = this.ctx.createGain();
+            const cVerb = this.ctx.createGain(); // Simplified reverb placeholder
+            
             cOsc.type = "sine";
             cOsc.frequency.setValueAtTime(cFreq, curTime);
-            cGain.gain.setValueAtTime(0.18, curTime);
-            cGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 1.4);
+            cGain.gain.setValueAtTime(0.12, curTime);
+            cGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 2.5);
+            
             cOsc.connect(cGain);
             cGain.connect(this.caveGain);
             cOsc.start(curTime);
-            cOsc.stop(curTime + 1.4);
+            cOsc.stop(curTime + 2.5);
           }
         }
 
@@ -627,32 +651,43 @@ class SoundManager {
       const now = this.ctx.currentTime;
       const vol = this.volumes.effects;
 
+      // 1. High Frequency Snap
       const snapBufferLength = this.ctx.sampleRate * 0.08;
       const snapBuffer = this.ctx.createBuffer(1, snapBufferLength, this.ctx.sampleRate);
       const snapData = snapBuffer.getChannelData(0);
       for (let i = 0; i < snapBufferLength; i++) {
         snapData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (snapBufferLength * 0.25));
       }
-
       const snapSource = this.ctx.createBufferSource();
       snapSource.buffer = snapBuffer;
-
       const snapFilter = this.ctx.createBiquadFilter();
       snapFilter.type = "highpass";
       snapFilter.frequency.setValueAtTime(1200 + Math.random() * 800, now);
-
       const snapGain = this.ctx.createGain();
-      snapGain.gain.setValueAtTime(0.28 * vol, now);
+      snapGain.gain.setValueAtTime(0.3 * vol, now);
       snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-
       snapSource.connect(snapFilter);
       snapFilter.connect(snapGain);
       snapGain.connect(this.ctx.destination);
       snapSource.start(now);
+
+      // 2. Low Frequency Thud
+      const thudOsc = this.ctx.createOscillator();
+      const thudGain = this.ctx.createGain();
+      thudOsc.type = "sine";
+      thudOsc.frequency.setValueAtTime(140, now);
+      thudOsc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+      thudGain.gain.setValueAtTime(0.4 * vol, now);
+      thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      thudOsc.connect(thudGain);
+      thudGain.connect(this.ctx.destination);
+      thudOsc.start(now);
+      thudOsc.stop(now + 0.12);
     } catch (e) {
       console.warn("Stone crunch audio error:", e);
     }
   }
+
 
   playGemChime(rarity: number) {
     this.init();

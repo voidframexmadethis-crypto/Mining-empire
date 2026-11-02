@@ -20,6 +20,32 @@ export const GAME_GEMS: GemType[] = [
   { id: "kaka", name: "Kaka Gem", color: 0xff4545, value: 1500, rarity: 0.06 }
 ];
 
+export const SORTED_GAME_GEMS = [...GAME_GEMS].sort((a, b) => a.rarity - b.rarity);
+
+// Shared crystal geometry singletons (scaled per instance to avoid allocating thousands of geometries)
+const sharedOctahedronGeo = new THREE.OctahedronGeometry(1, 1);
+const sharedIcosahedronGeo = new THREE.IcosahedronGeometry(1, 0);
+const sharedKakaGeo = new THREE.TorusKnotGeometry(0.65, 0.06, 16, 6);
+
+// Shared PBR glossy gemstone materials (1 material per gem type, eliminating thousands of draw-call shader switches)
+const sharedCrystalMaterials: Record<string, THREE.MeshPhysicalMaterial> = {};
+export function getSharedCrystalMaterial(gem: GemType): THREE.MeshPhysicalMaterial {
+  if (sharedCrystalMaterials[gem.id]) return sharedCrystalMaterials[gem.id];
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: gem.color,
+    emissive: gem.color,
+    emissiveIntensity: 0.35,
+    metalness: 0.2,
+    roughness: 0.04,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.03,
+    reflectivity: 1.0,
+    envMapIntensity: 2.2
+  });
+  sharedCrystalMaterials[gem.id] = mat;
+  return mat;
+}
+
 export type GemDrop = {
   type: GemType;
   mesh: THREE.Mesh;
@@ -35,513 +61,481 @@ export type OreOptions = {
   onGemCollected?: (gem: GemType) => void;
 };
 
-// Procedural Minecraft-style Block Cracking Textures (Stage 0 to 5)
-const crackTextureCache: THREE.CanvasTexture[] = [];
-
-export function getMinecraftCrackTexture(stage: number): THREE.CanvasTexture {
-  if (crackTextureCache[stage]) return crackTextureCache[stage];
-
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    const dummyCanvas = { width: 64, height: 64, getContext: () => null } as unknown as HTMLCanvasElement;
-    return new THREE.CanvasTexture(dummyCanvas);
-  }
-
+// Advanced Geological Texture Generator
+function createGeologyTexture(color: string, detailColor: string): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
+  canvas.width = 512; canvas.height = 512;
   const ctx = canvas.getContext("2d")!;
-
-  // Minecraft Cobblestone / Stone base face
-  ctx.fillStyle = "#6e6e73";
-  ctx.fillRect(0, 0, 64, 64);
-
-  // Stone pixel noise
-  for (let x = 0; x < 64; x += 4) {
-    for (let y = 0; y < 64; y += 4) {
-      const shade = Math.floor(Math.random() * 36) - 18;
-      const base = 115 + shade;
-      ctx.fillStyle = `rgb(${base}, ${base}, ${base + 4})`;
-      ctx.fillRect(x, y, 4, 4);
-    }
+  
+  // Base Rock
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 512, 512);
+  
+  // 1. Fractures and Grain
+  ctx.strokeStyle = detailColor;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 1500; i++) {
+    ctx.globalAlpha = Math.random() * 0.4;
+    ctx.beginPath();
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 30);
+    ctx.stroke();
+  }
+  
+  // 2. Layered Mineral Deposits (Stratification)
+  for (let i = 0; i < 20; i++) {
+    ctx.globalAlpha = Math.random() * 0.15;
+    ctx.fillStyle = detailColor;
+    const h = 20 + Math.random() * 40;
+    const y = Math.random() * 512;
+    ctx.fillRect(0, y, 512, h);
   }
 
-  // Draw Minecraft-style pixelated dark cracks if stage > 0
-  if (stage > 0) {
-    ctx.strokeStyle = "#111113";
-    ctx.lineWidth = 3.5;
-
-    // Fracture paths spreading based on stage
-    const branches = [
-      // Stage 1: Central crack
-      [[32, 12], [28, 24], [36, 36], [32, 52]],
-      // Stage 2: Left branch
-      [[28, 24], [16, 20], [8, 32]],
-      // Stage 3: Right branch
-      [[36, 36], [48, 32], [56, 44]],
-      // Stage 4: Top & bottom corners
-      [[32, 12], [44, 8], [52, 4]],
-      [[32, 52], [20, 56], [12, 60]],
-      // Stage 5: Full spiderweb destruction
-      [[16, 20], [8, 12]], [[48, 32], [52, 20]], [[28, 24], [24, 40]]
-    ];
-
-    for (let b = 0; b < Math.min(stage, branches.length); b++) {
-      const path = branches[b];
-      ctx.beginPath();
-      ctx.moveTo(path[0][0], path[0][1]);
-      for (let i = 1; i < path.length; i++) {
-        ctx.lineTo(path[i][0], path[i][1]);
-      }
-      ctx.stroke();
-    }
-
-    // High contrast black pixel outline for Minecraft sharpness
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 1.5;
-    for (let b = 0; b < Math.min(stage, branches.length); b++) {
-      const path = branches[b];
-      ctx.beginPath();
-      ctx.moveTo(path[0][0], path[0][1]);
-      for (let i = 1; i < path.length; i++) {
-        ctx.lineTo(path[i][0], path[i][1]);
-      }
-      ctx.stroke();
-    }
+  // 3. Pitting and Small Stones
+  ctx.fillStyle = detailColor;
+  for (let i = 0; i < 100; i++) {
+    ctx.globalAlpha = Math.random() * 0.5;
+    ctx.beginPath();
+    ctx.arc(Math.random() * 512, Math.random() * 512, 1 + Math.random() * 6, 0, Math.PI * 2);
+    ctx.fill();
   }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  crackTextureCache[stage] = texture;
-  return texture;
+  
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
 }
+
+const rockMaterialCache: Record<number, THREE.MeshStandardMaterial> = {};
+
+function getRockMaterial(depth: number): THREE.MeshStandardMaterial {
+  if (rockMaterialCache[depth]) return rockMaterialCache[depth];
+  
+  const isDeep = depth >= 4;
+  const tex = createGeologyTexture(isDeep ? "#2c3138" : "#6e6e73", isDeep ? "#14171a" : "#4a4a4d");
+  
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex,
+    roughness: 0.8,
+    metalness: 0.15,
+    color: isDeep ? 0x5c636b : 0xaaaaae
+  });
+  
+  rockMaterialCache[depth] = mat;
+  return mat;
+}
+
+// ----------------------------------------------------
+// DEBRIS MANAGER FOR REALISTIC MINING FRAGMENTS (INSTANCED)
+// ----------------------------------------------------
+class DebrisManager {
+  private static instance: DebrisManager;
+  private scene!: THREE.Scene;
+  private fragments: { index: number; velocity: THREE.Vector3; life: number; maxLife: number }[] = [];
+  private instMesh!: THREE.InstancedMesh;
+  private maxFragments = 600;
+  private nextIndex = 0;
+  private tempMatrix = new THREE.Matrix4();
+  private tempPos = new THREE.Vector3();
+  private tempRot = new THREE.Euler();
+  private tempScale = new THREE.Vector3();
+  private tempQuat = new THREE.Quaternion();
+  private tempRotQuat = new THREE.Quaternion();
+  
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+    const geo = new THREE.DodecahedronGeometry(0.12, 0);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.8, metalness: 0.2 });
+    this.instMesh = new THREE.InstancedMesh(geo, mat, this.maxFragments);
+    this.instMesh.castShadow = false; // Disable particle shadow casting for significant GPU speedup
+    this.instMesh.frustumCulled = false;
+    
+    // Hide all initially
+    const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < this.maxFragments; i++) {
+      this.instMesh.setMatrixAt(i, hidden);
+    }
+    this.scene.add(this.instMesh);
+  }
+
+  static getInstance(scene?: THREE.Scene): DebrisManager {
+    if (!this.instance && scene) this.instance = new DebrisManager(scene);
+    return this.instance;
+  }
+
+  static instanceAvailable(): boolean {
+    return !!this.instance;
+  }
+
+  spawn(pos: THREE.Vector3, mat: THREE.Material, count: number) {
+    for (let i = 0; i < count; i++) {
+      const idx = this.nextIndex % this.maxFragments;
+      this.nextIndex++;
+      
+      const life = 1.5 + Math.random() * 1.5;
+      this.fragments = this.fragments.filter(f => f.index !== idx); // Remove old entry if exists
+      this.fragments.push({
+        index: idx,
+        velocity: new THREE.Vector3((Math.random()-0.5)*4, 2 + Math.random()*5, (Math.random()-0.5)*4),
+        life,
+        maxLife: life
+      });
+
+      this.tempPos.copy(pos);
+      this.tempRot.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+      this.tempScale.setScalar(0.4 + Math.random() * 0.8);
+      this.tempRotQuat.setFromEuler(this.tempRot);
+      this.tempMatrix.compose(this.tempPos, this.tempRotQuat, this.tempScale);
+      this.instMesh.setMatrixAt(idx, this.tempMatrix);
+    }
+    this.instMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  update(dt: number) {
+    if (this.fragments.length === 0) return;
+
+    for (let i = this.fragments.length - 1; i >= 0; i--) {
+      const f = this.fragments[i];
+      f.life -= dt;
+      
+      if (f.life <= 0) {
+        this.tempScale.setScalar(0);
+        this.instMesh.getMatrixAt(f.index, this.tempMatrix);
+        this.tempMatrix.makeScale(0, 0, 0);
+        this.instMesh.setMatrixAt(f.index, this.tempMatrix);
+        this.fragments.splice(i, 1);
+        continue;
+      }
+
+      // Physics
+      f.velocity.y -= 15 * dt;
+      
+      this.instMesh.getMatrixAt(f.index, this.tempMatrix);
+      this.tempMatrix.decompose(this.tempPos, this.tempQuat, this.tempScale);
+      
+      this.tempPos.addScaledVector(f.velocity, dt);
+      
+      // Ground bounce
+      if (this.tempPos.y < -50) {
+         f.life = 0;
+      }
+
+      // Scaling down at end of life
+      if (f.life < 0.5) {
+        const s = (f.life / 0.5) * (this.tempScale.x);
+        this.tempScale.setScalar(Math.max(0, s));
+      }
+
+      this.tempMatrix.compose(this.tempPos, this.tempQuat, this.tempScale);
+      this.instMesh.setMatrixAt(f.index, this.tempMatrix);
+    }
+    this.instMesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
 
 export class GemOreDeposit {
   readonly group = new THREE.Group();
-
   health: number;
   maxHealth: number;
   broken = false;
   regenTimer = 0;
-  private readonly regenDuration = 10; // Regenerates in 10 seconds!
+  private readonly regenDuration = 15;
 
   private scene: THREE.Scene;
+  private debrisManager: DebrisManager;
   private drops: GemDrop[] = [];
   private inventory: Record<string, number> = {};
   private rockMesh!: THREE.InstancedMesh;
-  private rockGeometry!: THREE.BoxGeometry;
-  private rockMaterial!: THREE.MeshStandardMaterial;
+  private crystalMeshes: THREE.Mesh[] = [];
   public options: OreOptions;
 
-  private readonly rockWidth = 5;
-  private readonly rockHeight = 3.5;
-  private readonly rockDepth = 3.5;
-  private readonly cellSize = 0.4;
+  private readonly rockWidth = 4.5;
+  private readonly rockHeight = 3.2;
+  private readonly rockDepth = 3.2;
+  private readonly cellSize = 0.5;
+
+  // Active instances track
+  private activeInstances: number[] = [];
 
   constructor(scene: THREE.Scene, options: OreOptions) {
     this.scene = scene;
     this.options = options;
-
-    this.maxHealth = 100 * Math.pow(1.45, options.depth);
+    this.debrisManager = DebrisManager.getInstance(scene);
+    this.maxHealth = 120 * Math.pow(1.5, options.depth);
     this.health = this.maxHealth;
-
     this.group.position.copy(options.position);
-    this.group.name = "EmbeddedGemOreDeposit";
-
-    this.createRockAndGems(options.gemCount ?? 30);
-
+    this.createGeologicalDeposit(options.gemCount ?? 25);
     scene.add(this.group);
   }
 
-  private chooseGem(): GemType {
-    const roll = Math.random();
-
-    // Deep depth increases chance of rare gems
-    const depthBonus = Math.min(0.35, this.options.depth * 0.1);
-    const adjustedRoll = Math.max(0, roll - depthBonus);
-
-    return [...GAME_GEMS]
-      .sort((a, b) => a.rarity - b.rarity)
-      .find(gem => adjustedRoll <= gem.rarity) ?? GAME_GEMS[0];
-  }
-
-  private createRockAndGems(count: number) {
-    this.rockGeometry = new THREE.BoxGeometry(
-      this.cellSize,
-      this.cellSize,
-      this.cellSize
-    );
-
-    this.rockMaterial = new THREE.MeshStandardMaterial({
-      map: getMinecraftCrackTexture(0),
-      color: this.options.depth >= 4 ? 0x666e78 : 0xaaaaae,
-      roughness: 0.9,
-      metalness: 0.05
-    });
-
-    // First create gem locations INSIDE the stone volume.
-    const gemLocations: {
-      type: GemType;
-      position: THREE.Vector3;
-      size: number;
-    }[] = [];
-
-    const columns = Math.ceil(Math.sqrt(count * 1.5));
-    const rows = Math.ceil(count / columns);
-
+  private createGeologicalDeposit(count: number) {
+    const geo = new THREE.DodecahedronGeometry(this.cellSize * 0.75, 0);
+    const mat = getRockMaterial(this.options.depth);
+    
+    // 1. Generate Crystals First (Embedded)
+    const crystals: { type: GemType; pos: THREE.Vector3; scale: number; rotation: THREE.Euler }[] = [];
     for (let i = 0; i < count; i++) {
-      const col = i % columns;
-      const row = Math.floor(i / columns);
-
-      const x = -1.85 + col * (3.7 / Math.max(1, columns - 1));
-      const y = -1.05 + row * (2.1 / Math.max(1, rows - 1));
-
-      const size = 0.23 + Math.random() * 0.12;
-
-      gemLocations.push({
-        type: this.chooseGem(),
-        position: new THREE.Vector3(
-          x + (Math.random() - 0.5) * 0.08,
-          y + (Math.random() - 0.5) * 0.08,
-          -1.48
-        ),
-        size
+      const type = this.chooseGem();
+      const pos = new THREE.Vector3(
+        (Math.random() - 0.5) * this.rockWidth * 0.85,
+        (Math.random() - 0.5) * this.rockHeight * 0.85,
+        (Math.random() - 0.5) * this.rockDepth * 0.85
+      );
+      crystals.push({
+        type,
+        pos,
+        scale: 0.22 + Math.random() * 0.28,
+        rotation: new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI)
       });
     }
 
-    // Build a solid voxel stone mass with cavities around gems.
+    // 2. Generate Rock Instances
     const matrices: THREE.Matrix4[] = [];
-
     const nx = Math.floor(this.rockWidth / this.cellSize);
     const ny = Math.floor(this.rockHeight / this.cellSize);
     const nz = Math.floor(this.rockDepth / this.cellSize);
-
     const temp = new THREE.Object3D();
 
     for (let ix = 0; ix < nx; ix++) {
       for (let iy = 0; iy < ny; iy++) {
         for (let iz = 0; iz < nz; iz++) {
-          const x = -this.rockWidth / 2 +
-            this.cellSize / 2 + ix * this.cellSize;
-          const y = -this.rockHeight / 2 +
-            this.cellSize / 2 + iy * this.cellSize;
-          const z = -this.rockDepth / 2 +
-            this.cellSize / 2 + iz * this.cellSize;
+          // Keep outer shell + sparse interior instances for optimal performance
+          const isShell = ix === 0 || ix === nx - 1 || iy === 0 || iy === ny - 1 || iz === 0 || iz === nz - 1;
+          if (!isShell && Math.random() > 0.15) continue;
 
-          const intersectsGem = gemLocations.some(gem => {
-            const dx = x - gem.position.x;
-            const dy = y - gem.position.y;
-            const dz = z - gem.position.z;
-
-            return (
-              Math.sqrt(dx * dx + dy * dy + dz * dz) <
-              gem.size * 1.35
-            );
-          });
-
-          if (intersectsGem) continue;
-
-          temp.position.set(x, y, z);
-          temp.rotation.set(
-            Math.random() * 0.08,
-            Math.random() * 0.08,
-            Math.random() * 0.08
-          );
+          const x = -this.rockWidth / 2 + this.cellSize / 2 + ix * this.cellSize;
+          const y = -this.rockHeight / 2 + this.cellSize / 2 + iy * this.cellSize;
+          const z = -this.rockDepth / 2 + this.cellSize / 2 + iz * this.cellSize;
+          
+          temp.position.set(x + (Math.random()-0.5)*0.15, y + (Math.random()-0.5)*0.15, z + (Math.random()-0.5)*0.15);
+          temp.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+          temp.scale.setScalar(0.95 + Math.random() * 0.45);
           temp.updateMatrix();
-
           matrices.push(temp.matrix.clone());
         }
       }
     }
 
-    this.rockMesh = new THREE.InstancedMesh(
-      this.rockGeometry,
-      this.rockMaterial,
-      matrices.length
-    );
-
-    this.rockMesh.name = "SolidStoneWithGemCavities";
-    this.rockMesh.castShadow = true;
+    this.rockMesh = new THREE.InstancedMesh(geo, mat, matrices.length);
+    this.rockMesh.castShadow = false;
     this.rockMesh.receiveShadow = true;
-
-    matrices.forEach((matrix, index) => {
-      this.rockMesh.setMatrixAt(index, matrix);
+    matrices.forEach((m, i) => {
+      this.rockMesh.setMatrixAt(i, m);
+      this.activeInstances.push(i);
     });
-
     this.rockMesh.instanceMatrix.needsUpdate = true;
     this.group.add(this.rockMesh);
 
-    // Place gems in cavities
-    for (const data of gemLocations) {
-      const gem = new THREE.Mesh(
-        new THREE.OctahedronGeometry(data.size, 1),
-        new THREE.MeshStandardMaterial({
-          color: data.type.color,
-          emissive: data.type.color,
-          emissiveIntensity: 0.55,
-          roughness: 0.15,
-          metalness: 0.3
-        })
-      );
+    // 3. Add Advanced Crystals with Shared High-Gloss Materials & Shared Geometries
+    crystals.forEach((c, i) => {
+      const crystalGeo =
+        c.type.id === "diamond"
+          ? sharedIcosahedronGeo
+          : c.type.id === "kaka"
+          ? sharedKakaGeo
+          : sharedOctahedronGeo;
 
-      gem.position.copy(data.position);
-      gem.rotation.set(
-        Math.random() * 0.5,
-        Math.random() * Math.PI,
-        Math.random() * 0.5
-      );
+      const crystalMat = getSharedCrystalMaterial(c.type);
 
-      gem.userData.embedded = true;
-      gem.userData.gemType = data.type;
-
-      this.group.add(gem);
-    }
+      const mesh = new THREE.Mesh(crystalGeo, crystalMat);
+      mesh.scale.setScalar(c.scale);
+      mesh.position.copy(c.pos);
+      mesh.rotation.copy(c.rotation);
+      mesh.userData.gemType = c.type;
+      
+      // Some crystals are partially visible at start for high-quality discoverability
+      const isInitiallyVisible = i % 8 === 0; 
+      mesh.userData.exposed = isInitiallyVisible;
+      mesh.visible = isInitiallyVisible; 
+      
+      this.crystalMeshes.push(mesh);
+      this.group.add(mesh);
+    });
   }
 
-  // Called when drill hits deposit
+  private chooseGem(): GemType {
+    const roll = Math.random();
+    const depthBonus = Math.min(0.35, this.options.depth * 0.1);
+    const adjustedRoll = Math.max(0, roll - depthBonus);
+    return SORTED_GAME_GEMS.find(gem => adjustedRoll <= gem.rarity) ?? GAME_GEMS[0];
+  }
+
   drill(damage: number): boolean {
     if (this.broken || damage <= 0) return false;
-
     this.health = Math.max(0, this.health - damage);
+    
+    // Reveal crystals based on health
+    const revealThreshold = this.health / this.maxHealth;
+    this.crystalMeshes.forEach((m, i) => {
+      if (!m.userData.exposed && (i / this.crystalMeshes.length) > revealThreshold) {
+        m.visible = true;
+        m.userData.exposed = true;
+      }
+    });
 
-    const damageRatio = 1 - this.health / this.maxHealth;
-    const stage = Math.min(5, Math.floor(damageRatio * 6));
-
-    // Update Minecraft pixelated crack texture stage!
-    this.rockMaterial.map = getMinecraftCrackTexture(stage);
-    this.rockMaterial.needsUpdate = true;
-
-    // Darken & crack stone visual ratio (22%+ faster cracking effect!)
-    this.rockMaterial.color.setRGB(
-      0.65 - damageRatio * 0.3,
-      0.65 - damageRatio * 0.3,
-      0.68 - damageRatio * 0.3
-    );
-
-    if (this.health <= 0) {
-      this.breakRock();
-      return true;
+    // Randomly remove rock instances to "carve" the deposit
+    if (this.activeInstances.length > 0 && Math.random() > 0.35) {
+      const idx = Math.floor(Math.random() * this.activeInstances.length);
+      const instanceId = this.activeInstances[idx];
+      this.activeInstances.splice(idx, 1);
+      
+      // Scale instance to 0
+      const mat = new THREE.Matrix4();
+      this.rockMesh.getMatrixAt(instanceId, mat);
+      
+      // Get world position for debris
+      const pos = new THREE.Vector3();
+      pos.setFromMatrixPosition(mat);
+      pos.applyMatrix4(this.group.matrixWorld);
+      
+      this.debrisManager.spawn(pos, this.rockMesh.material as THREE.Material, 2 + Math.floor(Math.random()*3));
+      
+      mat.makeScale(0,0,0);
+      this.rockMesh.setMatrixAt(instanceId, mat);
+      this.rockMesh.instanceMatrix.needsUpdate = true;
+      
+      soundManager.playRockCrunch();
     }
 
+    if (this.health <= 0) {
+      this.breakDeposit();
+      return true;
+    }
     return false;
   }
 
-  private breakRock() {
+  private breakDeposit() {
     if (this.broken) return;
     this.broken = true;
     this.regenTimer = this.regenDuration;
-
     soundManager.playBlockShatter();
 
-    const gemMeshes = this.group.children.filter(
-      child =>
-        child instanceof THREE.Mesh &&
-        child !== this.rockMesh
-    ) as THREE.Mesh[];
+    // Launch visible crystals as drops
+    this.crystalMeshes.forEach(m => {
+      if (m.parent) {
+        const type = m.userData.gemType as GemType;
+        const worldPos = new THREE.Vector3();
+        m.getWorldPosition(worldPos);
+        
+        this.group.remove(m);
+        
+        // Re-use physical drop material
+        const drop = new THREE.Mesh(m.geometry, m.material);
+        drop.position.copy(worldPos);
+        drop.userData.collectible = true;
+        drop.userData.gemType = type;
+        this.scene.add(drop);
 
-    // Detach embedded gems and launch loose collectibles effortlessly into the cave with high pop velocity!
-    for (const gem of gemMeshes) {
-      const type = gem.userData.gemType as GemType;
-      const worldPosition = gem.getWorldPosition(
-        new THREE.Vector3()
-      );
+        this.drops.push({
+          type,
+          mesh: drop,
+          velocity: new THREE.Vector3((Math.random()-0.5)*4, 4+Math.random()*4, (Math.random()-0.5)*4),
+          collected: false
+        });
+      }
+    });
 
-      this.group.remove(gem);
-
-      const drop = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.3, 1),
-        new THREE.MeshPhysicalMaterial({
-          color: type.color,
-          emissive: type.color,
-          emissiveIntensity: 0.8,
-          roughness: 0.05,
-          metalness: 0.15,
-          transmission: 0.82,
-          ior: 1.58,
-          thickness: 0.8,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.08
-        })
-      );
-
-      drop.position.copy(worldPosition);
-      drop.userData.collectible = true;
-      drop.userData.gemType = type;
-
-      this.scene.add(drop);
-
-      this.drops.push({
-        type,
-        mesh: drop,
-        velocity: new THREE.Vector3(
-          (Math.random() - 0.5) * 4.5,
-          3.8 + Math.random() * 3.5,
-          (Math.random() - 0.5) * 4.5
-        ),
-        collected: false
-      });
-    }
-
-    this.scene.remove(this.group);
+    // Hide rock
+    this.rockMesh.visible = false;
   }
 
-  // Regenerate/Respawn the rock and gems automatically!
   regenerate() {
     if (!this.broken) return;
-
     this.broken = false;
     this.health = this.maxHealth;
-
-    // Clean up remaining drops
-    for (const drop of this.drops) {
-      if (drop.mesh.parent) drop.mesh.parent.remove(drop.mesh);
-      drop.mesh.geometry.dispose();
-    }
+    this.activeInstances = [];
+    
+    // Clean up
+    this.drops.forEach(d => { if(d.mesh.parent) d.mesh.parent.remove(d.mesh); d.mesh.geometry.dispose(); });
     this.drops = [];
-
-    // Clear old group children
-    while (this.group.children.length > 0) {
+    
+    while(this.group.children.length > 0) {
       const child = this.group.children[0];
       this.group.remove(child);
-      if (child instanceof THREE.Mesh) child.geometry.dispose();
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
     }
-
-    if (this.rockGeometry) this.rockGeometry.dispose();
-    if (this.rockMaterial) this.rockMaterial.dispose();
-
-    // Recreate fresh stone and gem cavity structure
-    this.createRockAndGems(this.options.gemCount ?? 30);
-    this.scene.add(this.group);
+    this.crystalMeshes = [];
+    this.createGeologicalDeposit(this.options.gemCount ?? 25);
   }
 
-  // Called in game loop
+  static updateGlobalDebris(dt: number) {
+    // This will be called by a dummy instance if needed, or we can just access the singleton
+    if (DebrisManager.instanceAvailable()) {
+      DebrisManager.getInstance().update(dt);
+    }
+  }
+
+  hasActiveDrops(): boolean {
+    return this.broken || (this.drops.length > 0 && this.drops.some(d => !d.collected));
+  }
+
   updateDrops(deltaTime: number, floorY: number) {
     if (this.broken) {
       this.regenTimer -= deltaTime;
-      if (this.regenTimer <= 0) {
-        this.regenerate();
-      }
+      if (this.regenTimer <= 0) this.regenerate();
     }
-
+    
     for (const drop of this.drops) {
+
       if (drop.collected) continue;
-
-      drop.velocity.y -= 9.8 * deltaTime;
-
-      drop.mesh.position.addScaledVector(
-        drop.velocity,
-        deltaTime
-      );
-
+      drop.velocity.y -= 12 * deltaTime; // Gravity
+      drop.mesh.position.addScaledVector(drop.velocity, deltaTime);
       if (drop.mesh.position.y <= floorY + 0.3) {
         drop.mesh.position.y = floorY + 0.3;
-        drop.velocity.y = 0;
-        drop.velocity.x *= 0.75;
-        drop.velocity.z *= 0.75;
+        drop.velocity.set(0, 0, 0);
       }
-
-      drop.mesh.rotation.y += deltaTime * 2.5;
+      drop.mesh.rotation.y += deltaTime * 3;
     }
   }
 
-  // Automatic pickup when player walks near loose gems
-  collectNear(
-    playerPosition: THREE.Vector3,
-    radius: number,
-    backpackCapacity: number,
-    currentBackpackTotal = 0
-  ): number {
+  collectNear(playerPos: THREE.Vector3, radius: number, cap: number, current = 0): number {
     let collected = 0;
-
     for (const drop of this.drops) {
       if (drop.collected) continue;
-
-      if ((currentBackpackTotal + collected) >= backpackCapacity) break;
-
-      if (
-        drop.mesh.position.distanceTo(playerPosition) > radius
-      ) continue;
-
+      if (current + collected >= cap) break;
+      if (drop.mesh.position.distanceTo(playerPos) > radius) continue;
+      
       drop.collected = true;
       drop.mesh.visible = false;
-
-      this.inventory[drop.type.id] =
-        (this.inventory[drop.type.id] ?? 0) + 1;
-
+      this.inventory[drop.type.id] = (this.inventory[drop.type.id] ?? 0) + 1;
       collected++;
-
       this.options.onGemCollected?.(drop.type);
     }
-
-    if (collected > 0) {
-      this.options.onInventoryChange?.({
-        ...this.inventory
-      });
-    }
-
+    if (collected > 0) this.options.onInventoryChange?.({...this.inventory});
     return collected;
   }
 
   removeGem(gemId: string): boolean {
     if ((this.inventory[gemId] ?? 0) > 0) {
       this.inventory[gemId]--;
-      if (this.inventory[gemId] <= 0) {
-        delete this.inventory[gemId];
-      }
+      if (this.inventory[gemId] <= 0) delete this.inventory[gemId];
       return true;
     }
     return false;
   }
 
-  getInventory() {
-    return { ...this.inventory };
-  }
-
-  clearInventory() {
-    this.inventory = {};
-  }
-
-  getTotalValue() {
-    return GAME_GEMS.reduce(
-      (sum, gem) =>
-        sum +
-        (this.inventory[gem.id] ?? 0) * gem.value,
-      0
-    );
-  }
-
+  getInventory() { return { ...this.inventory }; }
+  clearInventory() { this.inventory = {}; }
   dispose() {
-    if (this.group.parent) {
-      this.group.parent.remove(this.group);
-    }
-    for (const drop of this.drops) {
-      if (drop.mesh.parent) drop.mesh.parent.remove(drop.mesh);
-      drop.mesh.geometry.dispose();
-    }
-    if (this.rockGeometry) this.rockGeometry.dispose();
-    if (this.rockMaterial) this.rockMaterial.dispose();
+    if (this.group.parent) this.group.parent.remove(this.group);
+    this.drops.forEach(d => { if(d.mesh.parent) d.mesh.parent.remove(d.mesh); d.mesh.geometry.dispose(); });
   }
 }
 
 export class GemDrillController {
-  power = 24.4; // Boosted by +22% to start (20 * 1.22 = 24.4 DPS)!
+  power = 24.4;
   speed = 1.35;
-  cooling = 1.0;
   scanner = false;
-
-  upgradePower(amount: number) {
-    this.power += amount;
-  }
-
-  upgradeSpeed(amount: number) {
-    this.speed += amount;
-  }
-
-  drill(deposit: GemOreDeposit, deltaTime: number) {
-    return deposit.drill(
-      this.power * this.speed * deltaTime
-    );
+  upgradePower(amount: number) { this.power += amount; }
+  upgradeSpeed(amount: number) { this.speed += amount; }
+  drill(deposit: GemOreDeposit, dt: number) {
+    return deposit.drill(this.power * this.speed * dt);
   }
 }
+

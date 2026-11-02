@@ -10,6 +10,10 @@ type SettingsModalProps = {
   onRestartTutorial: () => void;
   onResetProgress: () => void;
   onTeleportToElevator: () => void;
+  graphicsQuality?: "ultra" | "high" | "balanced" | "performance";
+  onGraphicsQualityChange?: (quality: "ultra" | "high" | "balanced" | "performance") => void;
+  cameraSensitivity?: number;
+  onCameraSensitivityChange?: (sens: number) => void;
 };
 
 export default function SettingsModal({
@@ -17,10 +21,14 @@ export default function SettingsModal({
   onClose,
   onRestartTutorial,
   onResetProgress,
-  onTeleportToElevator
+  onTeleportToElevator,
+  graphicsQuality = "high",
+  onGraphicsQualityChange,
+  cameraSensitivity = 1.0,
+  onCameraSensitivityChange
 }: SettingsModalProps) {
-  const [graphicsQuality, setGraphicsQuality] = useState<"ultra" | "high" | "balanced" | "performance">("high");
-  const [cameraSensitivity, setCameraSensitivity] = useState(1.0);
+  const [localQuality, setLocalQuality] = useState<"ultra" | "high" | "balanced" | "performance">(graphicsQuality);
+  const [localSensitivity, setLocalSensitivity] = useState(cameraSensitivity);
   const [musicVol, setMusicVol] = useState(soundManager.volumes.music);
   const [machineryVol, setMachineryVol] = useState(soundManager.volumes.machinery);
   const [effectsVol, setEffectsVol] = useState(soundManager.volumes.effects);
@@ -126,23 +134,74 @@ export default function SettingsModal({
 
           {/* Graphics & Performance */}
           <div className="space-y-3 bg-slate-950/50 p-4 rounded-2xl border border-slate-800">
-            <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
-              <span>🖥️ Graphics Quality & Performance</span>
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                <span>🖥️ Graphics Quality & Performance</span>
+              </h3>
+              <span className="text-[11px] font-mono text-emerald-300 uppercase bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/80">
+                {localQuality}
+              </span>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {(["ultra", "high", "balanced", "performance"] as const).map(qual => (
                 <button
                   key={qual}
-                  onClick={() => setGraphicsQuality(qual)}
+                  onClick={() => {
+                    setLocalQuality(qual);
+                    onGraphicsQualityChange?.(qual);
+                  }}
                   className={`py-2 px-3 rounded-xl text-xs font-bold capitalize transition-all border ${
-                    graphicsQuality === qual
-                      ? "bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg"
+                    localQuality === qual
+                      ? "bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg font-black"
                       : "bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-800"
                   }`}
                 >
-                  {qual}
+                  {qual === "performance" ? "⚡ Performance" : qual === "balanced" ? "⚖️ Balanced" : qual === "high" ? "✨ High" : "🌟 Ultra Glossy"}
                 </button>
               ))}
+            </div>
+            <div className="text-[11px] text-slate-400 pt-1">
+              {localQuality === "ultra" && "Ultra: Full 2.0x Retina scaling, PCF soft shadows, 600m view, luxury reflections."}
+              {localQuality === "high" && "High (Recommended): 1.5x resolution, PCF shadows, 450m view distance, 60 FPS."}
+              {localQuality === "balanced" && "Balanced: 1.25x resolution, basic shadows, optimized for laptops and mobile."}
+              {localQuality === "performance" && "Performance: Maximum FPS, shadows disabled, 1.0x native resolution for low-end hardware."}
+            </div>
+          </div>
+
+          {/* 3rd-Person Camera & View Controls */}
+          <div className="space-y-3 bg-slate-950/50 p-4 rounded-2xl border border-slate-800">
+            <h3 className="text-sm font-bold text-sky-400 uppercase tracking-wider flex items-center gap-2">
+              <span>🎥 3rd-Person Camera & Orbit</span>
+            </h3>
+
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs text-slate-300">
+                <span>Orbit Sensitivity</span>
+                <span className="font-mono text-sky-400">{Math.round(localSensitivity * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.4"
+                max="2.5"
+                step="0.1"
+                value={localSensitivity}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setLocalSensitivity(val);
+                  onCameraSensitivityChange?.(val);
+                }}
+                className="w-full accent-sky-400 cursor-pointer"
+              />
+            </div>
+
+            <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 text-xs space-y-1.5 text-slate-300">
+              <div className="font-bold text-white flex items-center gap-1.5">
+                <span>🕹️ Camera Controls:</span>
+              </div>
+              <div>• <b>Mouse:</b> Click & drag (or right-click drag) to orbit around player. Scroll wheel zooms in/out.</div>
+              <div>• <b>Keys:</b> Press <kbd className="px-1 py-0.5 bg-slate-800 rounded border border-slate-700 text-cyan-300">Q</kbd> / <kbd className="px-1 py-0.5 bg-slate-800 rounded border border-slate-700 text-cyan-300">E</kbd> to rotate camera view left/right.</div>
+              <div>• <b>Touch / Mobile:</b> Swipe on the right side of the screen to orbit yaw & pitch. Pinch to zoom distance.</div>
+              <div>• <b>Camera-Relative Movement:</b> Pressing forward moves where the camera is currently facing!</div>
             </div>
           </div>
 
