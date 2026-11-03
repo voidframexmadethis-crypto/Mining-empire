@@ -314,7 +314,7 @@ export default function DeepMiningApp() {
     lastDepthRef.current = 0;
 
     if (playerGroupRef.current) {
-      playerGroupRef.current.position.set(DEFAULT_SURFACE_SPAWN.x, 0, DEFAULT_SURFACE_SPAWN.z);
+      playerGroupRef.current.position.set(0, 0, 104);
       playerGroupRef.current.rotation.y = 0;
     }
     playerYawRef.current = 0;
@@ -374,7 +374,7 @@ export default function DeepMiningApp() {
         if (saved.playerPos) {
           playerGroupRef.current.position.set(saved.playerPos.x, saved.playerPos.y, saved.playerPos.z);
         } else {
-          playerGroupRef.current.position.set(DEFAULT_SURFACE_SPAWN.x, 0, DEFAULT_SURFACE_SPAWN.z);
+          playerGroupRef.current.position.set(0, 0, 104);
         }
         if (typeof saved.playerYaw === "number") {
           playerGroupRef.current.rotation.y = saved.playerYaw;
