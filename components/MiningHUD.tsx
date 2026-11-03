@@ -236,17 +236,28 @@ export default function MiningHUD({
 
   return (
     <div className="fixed inset-0 pointer-events-none z-40 flex flex-col justify-between p-3 md:p-6 font-sans">
-      {/* Top Floating Control Bar (Minimal & Unobtrusive Upper-Right Money Counter) */}
+      {/* Top Floating Control Bar */}
       <motion.div
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         className="pointer-events-auto flex items-center justify-between gap-2 max-w-5xl mx-auto w-full"
       >
-        {/* Location Badge */}
-        <div className="bg-slate-900/85 backdrop-blur-md border border-slate-700/80 rounded-2xl px-3.5 py-1.5 text-white shadow-xl flex items-center gap-2 text-xs font-bold">
-          <span className="text-cyan-400">📍 {location}</span>
-          <span className="text-slate-500">·</span>
-          <span className="text-emerald-400 font-mono">{depthFeet} FT</span>
+        {/* Top Left Corner: Pause Button + Location Badge */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onPause}
+            className="px-3.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-amber-400 font-bold text-xs border border-amber-500/60 shadow-xl backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
+            title="Pause Game (Esc)"
+          >
+            <span className="text-sm">⏸</span>
+            <span>PAUSE</span>
+          </button>
+
+          <div className="bg-slate-900/85 backdrop-blur-md border border-slate-700/80 rounded-2xl px-3.5 py-1.5 text-white shadow-xl flex items-center gap-2 text-xs font-bold">
+            <span className="text-cyan-400">📍 {location}</span>
+            <span className="text-slate-500">·</span>
+            <span className="text-emerald-400 font-mono">{depthFeet} FT</span>
+          </div>
         </div>
 
         {/* Upper-Right Discreet Corner HUD (Money + Menu + Clear) */}
@@ -257,18 +268,10 @@ export default function MiningHUD({
             <span>${cash.toLocaleString()}</span>
           </div>
 
-          {/* Pause Button */}
-          <button
-            onClick={onPause}
-            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-amber-400 font-bold text-xs border border-amber-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1"
-          >
-            <span>⏸ Pause</span>
-          </button>
-
           {/* Upgrades & Menu Button */}
           <button
             onClick={() => setActiveTab(activeTab === "upgrades" ? "none" : "upgrades")}
-            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-cyan-300 font-bold text-xs border border-cyan-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1"
+            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-cyan-300 font-bold text-xs border border-cyan-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1 cursor-pointer"
           >
             <span>☰ Menu</span>
           </button>
