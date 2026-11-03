@@ -7,7 +7,8 @@ import {
   Worker,
   WorkerCategory,
   FacilityType,
-  BusinessUpgrades
+  BusinessUpgrades,
+  WorkerRole
 } from "@/lib/management-system";
 import { soundManager } from "@/lib/audio";
 
@@ -27,6 +28,8 @@ const FACILITY_NAMES: Record<FacilityType, string> = {
   manufacturing_plant: "Jewelry Manufacturing Plant (Z: 170)",
   finishing_plant: "Jewelry Finishing & Inspection (Z: 195)",
   retail_shop: "Jewelry Retail Shopping District (Z: 195)",
+  underground_mine: "Underground Mining Tunnels",
+  transport_logistics: "Industrial Logistics & Storage",
   none: "Unassigned (Break Lounge)"
 };
 
@@ -42,7 +45,7 @@ export default function ManagementModal({
   const [upgrades, setUpgrades] = useState<BusinessUpgrades>(managementSystem.getUpgrades());
   const stats = managementSystem.getStats();
 
-  if (!isOpen) return null;
+  const [preferredRole, setPreferredRole] = useState<WorkerRole>("miner");
 
   const refreshWorkers = () => {
     const list = managementSystem.getWorkers();
@@ -50,13 +53,16 @@ export default function ManagementModal({
     onWorkersUpdated?.();
   };
 
+  if (!isOpen) return null;
+
   const handleHire = (cat: WorkerCategory) => {
     const costs: Record<WorkerCategory, number> = { beginner: 250, experienced: 750, expert: 2200 };
     const cost = costs[cat];
     if (cash < cost) return;
 
     onCashChange(cash - cost);
-    managementSystem.hireWorker(cat, "original_factory", "Gem Driller");
+    // Auto assign based on active role toggle
+    managementSystem.hireWorker(cat, "none", "Unassigned", preferredRole);
     soundManager.playCashRegister();
     refreshWorkers();
   };
@@ -202,28 +208,48 @@ export default function ManagementModal({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleHire("beginner")}
-                    disabled={cash < 250}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
-                  >
-                    + Beginner ($250)
-                  </button>
-                  <button
-                    onClick={() => handleHire("experienced")}
-                    disabled={cash < 750}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
-                  >
-                    + Experienced ($750)
-                  </button>
-                  <button
-                    onClick={() => handleHire("expert")}
-                    disabled={cash < 2200}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
-                  >
-                    + Expert ($2,200)
-                  </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 mb-1">Recruit Role</span>
+                    <select
+                      value={preferredRole}
+                      onChange={e => setPreferredRole(e.target.value as WorkerRole)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-xs text-cyan-400 font-bold focus:outline-none"
+                    >
+                      <option value="miner">Miner</option>
+                      <option value="transporter">Transporter</option>
+                      <option value="sorter">Sorter</option>
+                      <option value="cutter">Cutter</option>
+                      <option value="polisher">Polisher</option>
+                      <option value="inspector">Inspector</option>
+                      <option value="packer">Packer</option>
+                      <option value="manager">Manager</option>
+                    </select>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleHire("beginner")}
+                      disabled={cash < 250}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
+                    >
+                      + Beginner ($250)
+                    </button>
+                    <button
+                      onClick={() => handleHire("experienced")}
+                      disabled={cash < 750}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
+                    >
+                      + Experienced ($750)
+                    </button>
+                    <button
+                      onClick={() => handleHire("expert")}
+                      disabled={cash < 2200}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all"
+                    >
+                      + Expert ($2,200)
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -253,11 +279,15 @@ export default function ManagementModal({
                             </span>
                           </div>
                           <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                            <span className="text-cyan-400 font-bold uppercase">{w.role}</span>
+                            <span>·</span>
                             <span>Skill: {w.skillLevel}/10</span>
                             <span>·</span>
-                            <span className="text-emerald-400 font-bold">Productivity: {w.productivity}x</span>
+                            <span className="text-emerald-400 font-bold">{w.productivity}x</span>
                             <span>·</span>
                             <span className="text-amber-300">${w.wagesPerMin}/min</span>
+                            <span>·</span>
+                            <span className={w.happiness > 50 ? "text-green-400" : "text-red-400"}>😊 {Math.round(w.happiness)}%</span>
                           </div>
                         </div>
 

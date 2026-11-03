@@ -222,6 +222,8 @@ export function createManagementOfficeBuilding(
     group,
     update: (dt: number) => {
       pulseTimer += dt;
+      if (Math.floor(pulseTimer * 15) % 1 !== 0) return; // 15Hz throttle
+
       // Pulse entrance waypoint ring
       waypointRing.scale.setScalar(1.0 + Math.sin(pulseTimer * 3) * 0.08);
       waypointRingMat.opacity = 0.6 + Math.sin(pulseTimer * 3) * 0.3;

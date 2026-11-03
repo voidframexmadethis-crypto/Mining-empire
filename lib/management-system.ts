@@ -10,21 +10,37 @@ export type FacilityType =
   | "manufacturing_plant"
   | "finishing_plant"
   | "retail_shop"
+  | "underground_mine"
+  | "transport_logistics"
   | "none";
+
+export type WorkerRole = 
+  | "miner" 
+  | "transporter" 
+  | "sorter" 
+  | "cutter" 
+  | "polisher" 
+  | "inspector" 
+  | "packer" 
+  | "manager";
 
 export type Worker = {
   id: string;
   name: string;
   category: WorkerCategory;
+  role: WorkerRole;
   hiringCost: number;
   wagesPerMin: number;
   skillLevel: number; // 1 - 10
+  experience: number; // 0 - 1000
   productivity: number; // multiplier e.g. 1.2x
+  happiness: number; // 0 - 100%
   assignedFacility: FacilityType;
-  assignedMachine: string;
-  status: "working" | "break";
-  schedule: string; // e.g. "9:00 AM - 5:00 PM"
-  breakSchedule: string; // e.g. "12:00 PM - 1:00 PM"
+  assignedMachine: string; // Or Area
+  status: "working" | "break" | "resting";
+  schedule: string; // e.g. "8:00 AM - 4:00 PM"
+  breakSchedule: string; // e.g. "12:00 PM - 12:30 PM"
+  shift: "day" | "night";
   trainingCost: number;
   promotionCost: number;
 };
@@ -65,6 +81,8 @@ const MACHINES_BY_FACILITY: Record<FacilityType, string[]> = {
   manufacturing_plant: ["Robotic Ring Assembler", "Necklace Weaver", "Pendant Micro-Welder", "Earring Setter"],
   finishing_plant: ["Ultrasonic Cleaner", "Microscope Inspection", "Laser Hallmarker", "Velvet Packaging Line"],
   retail_shop: ["Luxury Display Counter", "VIP Gem Appraisal Desk", "Cashier Terminal", "Security Vault"],
+  underground_mine: ["North Tunnel", "East Ravine", "Grand Cathedral", "Abyssal Core", "Stairway Alpha"],
+  transport_logistics: ["Mine Cart Station A", "Mine Cart Station B", "Elevator Loading Bay", "Surface Receiving", "Warehouse A"],
   none: ["Unassigned"]
 };
 
@@ -114,7 +132,8 @@ export class ManagementSystem {
   hireWorker(
     category: WorkerCategory,
     assignedFacility: FacilityType = "none",
-    assignedMachine = "Unassigned"
+    assignedMachine = "Unassigned",
+    preferredRole?: WorkerRole
   ): Worker {
     const id = "worker_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
     const name = WORKER_NAMES[Math.floor(Math.random() * WORKER_NAMES.length)];
@@ -125,6 +144,7 @@ export class ManagementSystem {
     let productivity = 1.15;
     let trainingCost = 150;
     let promotionCost = 600;
+    let experience = 0;
 
     if (category === "experienced") {
       hiringCost = 750;
@@ -133,28 +153,43 @@ export class ManagementSystem {
       productivity = 1.6;
       trainingCost = 350;
       promotionCost = 1800;
+      experience = 400;
     } else if (category === "expert") {
       hiringCost = 2200;
       wagesPerMin = 120;
       skillLevel = 8;
       productivity = 2.4;
       trainingCost = 800;
-      promotionCost = 0; // max category
+      promotionCost = 0;
+      experience = 800;
+    }
+
+    // Default role based on facility if not specified
+    let role: WorkerRole = preferredRole || "manager";
+    if (!preferredRole) {
+      if (assignedFacility === "underground_mine") role = "miner";
+      else if (assignedFacility === "transport_logistics") role = "transporter";
+      else if (assignedFacility === "original_factory") role = "sorter";
+      else if (assignedFacility.includes("plant")) role = "cutter";
     }
 
     const worker: Worker = {
       id,
       name,
       category,
+      role,
       hiringCost,
       wagesPerMin,
       skillLevel,
+      experience,
       productivity,
+      happiness: 85 + Math.random() * 15,
       assignedFacility,
       assignedMachine,
       status: "working",
-      schedule: "8:00 AM - 5:00 PM",
-      breakSchedule: "12:00 PM - 1:00 PM",
+      schedule: "8:00 AM - 4:00 PM",
+      breakSchedule: "12:00 PM - 12:30 PM",
+      shift: Math.random() > 0.3 ? "day" : "night",
       trainingCost,
       promotionCost
     };
@@ -315,9 +350,24 @@ export class ManagementSystem {
     this.stats.totalWagesPaid += wageDeduction;
     this.stats.totalOperatingExpenses += wageDeduction;
     
+    // Update Worker Stats: Experience & Happiness
+    this.workers.forEach(w => {
+      if (w.status === "working") {
+        // Experience gain
+        w.experience = Math.min(1000, w.experience + (deltaTimeSeconds * 0.05));
+        // Subtle happiness fluctuation
+        w.happiness = Math.max(0, Math.min(100, w.happiness + (Math.random() - 0.48) * 0.1));
+      }
+    });
+
     // Calculate efficiency
-    const activeWorkers = this.workers.filter(w => w.assignedFacility !== "none").length;
-    const efficiency = Math.min(100, Math.round(75 + activeWorkers * 3 + this.upgrades.machineSpeedLevel * 4));
+    const activeWorkers = this.workers.filter(w => w.assignedFacility !== "none" && w.status === "working");
+    const avgHappiness = activeWorkers.length > 0 
+      ? activeWorkers.reduce((acc, w) => acc + w.happiness, 0) / activeWorkers.length 
+      : 100;
+    
+    const happinessMult = 0.5 + (avgHappiness / 100) * 0.5; // 0.5x to 1.0x boost
+    const efficiency = Math.min(100, Math.round((75 + activeWorkers.length * 3 + this.upgrades.machineSpeedLevel * 4) * happinessMult));
     this.stats.productionEfficiency = efficiency;
 
     // Net profit rate ($/min)

@@ -17,7 +17,15 @@ export const JEWELRY_PRODUCTS: JewelryItemType[] = [
   { id: "watch", name: "Luxury Gem Watch", price: 1200, color: 0xff9828, icon: "⌚" },
   { id: "pendant", name: "Royal Pendant", price: 1500, color: 0xff4d8c, icon: "🔮" },
   { id: "earrings", name: "Sapphire Earrings", price: 950, color: 0x347bff, icon: "✨" },
-  { id: "fingernail", name: "Fingernail Gem Armor", price: 2100, color: 0xff4545, icon: "💅" }
+  { id: "fingernail", name: "Fingernail Gem Armor", price: 2100, color: 0xff4545, icon: "💅" },
+  // GROUP 6 & 10: GOLD CROWN LUXURY COLLECTION
+  { id: "diamond_ring", name: "Imperial Diamond Royal Ring", price: 3500, color: 0x8deaff, icon: "👑" },
+  { id: "emerald_ring", name: "Emerald Sovereign Signet", price: 4200, color: 0x10b981, icon: "❇️" },
+  { id: "sapphire_necklace", name: "Sapphire Princess Necklace", price: 5800, color: 0x3b82f6, icon: "📿" },
+  { id: "ruby_bracelet", name: "Empress Ruby Bracelet", price: 6500, color: 0xef4444, icon: "💖" },
+  { id: "silver_set", name: "Silver Star Luxury Set", price: 8000, color: 0xe2e8f0, icon: "⭐" },
+  { id: "gold_crown", name: "Grand Gold Sovereign Crown", price: 25000, color: 0xfacc15, icon: "👑" },
+  { id: "crown_diadem", name: "Crown Jewel Imperial Diadem", price: 75000, color: 0xffd700, icon: "🏆" }
 ];
 
 export type IndustrialDistrictEngine = {
@@ -235,9 +243,6 @@ export function createIndustrialDistrict(
     });
   }
 
-  function update(delta: number) {
-    const dt = Math.min(delta, 0.05);
-    animTimer += dt;
 
     let isDistrictVisible = true;
     function setVisible(val: boolean) {

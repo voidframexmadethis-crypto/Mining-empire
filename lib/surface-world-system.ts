@@ -14,9 +14,11 @@ export type SurfaceWorldSystem = {
 };
 
 export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem {
-  const CHUNK_SIZE = 100; // Larger chunks for surface
+  const CHUNK_SIZE = 100;
   const RENDER_RADIUS = 2;
+  const CHUNK_SEGMENTS = 16;
   const loadedChunks = new Map<string, THREE.Group>();
+  let lastChunkGenTime = 0;
   let isSystemVisible = true;
 
   const grassMat = new THREE.MeshStandardMaterial({ color: 0x4b7833, roughness: 0.8 });
@@ -34,7 +36,7 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
     const chunkCenterX = cx * CHUNK_SIZE;
 
     // 1. Terrain Mesh
-    const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 16, 16);
+    const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SEGMENTS, CHUNK_SEGMENTS);
     const posAttr = geo.attributes.position;
     for (let i = 0; i < posAttr.count; i++) {
         const vx = chunkCenterX + posAttr.getX(i);
@@ -64,18 +66,23 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
 
       const currentCZ = Math.floor((playerPos.z + CHUNK_SIZE / 2) / CHUNK_SIZE);
       const currentCX = Math.floor((playerPos.x + CHUNK_SIZE / 2) / CHUNK_SIZE);
-      
       const neededKeys = new Set<string>();
+
+      const now = performance.now();
+      let generatedThisFrame = false;
+
       for (let dz = -RENDER_RADIUS; dz <= RENDER_RADIUS; dz++) {
         for (let dx = -RENDER_RADIUS; dx <= RENDER_RADIUS; dx++) {
           const cz = currentCZ + dz;
           const cx = currentCX + dx;
           const key = `${cz}_${cx}`;
           neededKeys.add(key);
-          if (!loadedChunks.has(key)) {
+          if (!loadedChunks.has(key) && !generatedThisFrame && (now - lastChunkGenTime > 40)) {
             const chunk = generateChunk(cz, cx);
             chunk.visible = isSystemVisible;
             loadedChunks.set(key, chunk);
+            lastChunkGenTime = now;
+            generatedThisFrame = true;
           }
         }
       }

@@ -160,13 +160,46 @@ export const ACHIEVEMENTS_LIST: Achievement[] = [
   {
     id: "discover_all_gems",
     title: "Grand Geologist",
-    description: "Discover all 8 gemstone species in the Gemstone Encyclopedia.",
+    description: "Discover all gemstone species in the Gemstone Encyclopedia.",
     rewardCash: 12000,
     icon: "📖",
     category: "exploration",
     unlocked: false,
     progress: 0,
     maxProgress: 8
+  },
+  {
+    id: "crown_jewel_found",
+    title: "Crown Jewel Discovery",
+    description: "Mine the ultra-rare legendary Crown Jewel of the Realm.",
+    rewardCash: 50000,
+    icon: "👑",
+    category: "mining",
+    unlocked: false,
+    progress: 0,
+    maxProgress: 1
+  },
+  {
+    id: "gold_crown_master",
+    title: "Sovereign Crown Jeweler",
+    description: "Craft the Grand Gold Sovereign Crown in your Surface Industrial District.",
+    rewardCash: 100000,
+    icon: "🏆",
+    category: "jewelry",
+    unlocked: false,
+    progress: 0,
+    maxProgress: 1
+  },
+  {
+    id: "log_flume_rider",
+    title: "Cavern Flume Voyager",
+    description: "Experience the underground log-flume water ride drop.",
+    rewardCash: 5000,
+    icon: "🪵",
+    category: "exploration",
+    unlocked: false,
+    progress: 0,
+    maxProgress: 1
   }
 ];
 

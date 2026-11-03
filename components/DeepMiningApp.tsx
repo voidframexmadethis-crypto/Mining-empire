@@ -14,16 +14,23 @@ import { buildMiningWorld } from "@/lib/cave-builder";
 import { managementSystem } from "@/lib/management-system";
 import { achievementsSystem } from "@/lib/achievements-system";
 import { gemEncyclopediaSystem, GemstoneEntry } from "@/lib/encyclopedia-system";
-import { createWorkerRenderer, WorkerRenderer } from "@/lib/worker-render-engine";
+import { createWorkerRenderer, WorkerRenderer, MACHINE_POSITIONS } from "@/lib/worker-render-engine";
 import { createManagementOfficeBuilding, ManagementOfficeBuilding } from "@/lib/management-office-building";
 import { saveSystem } from "@/lib/save-system";
 import TutorialModal from "@/components/TutorialModal";
 import SettingsModal from "@/components/SettingsModal";
 import StatisticsModal from "@/components/StatisticsModal";
 import LoadingScreen from "@/components/LoadingScreen";
+import AudioDiagnostics from "@/components/AudioDiagnostics";
 import { createMaxPowerDrill } from "@/lib/maxpower-drill";
 import { createMegaCaveSystem, MegaCaveSystem, getSmoothTargetY, MAMMOTH_CAVE_GENERATOR } from "@/lib/mega-cave-system";
 import { createSurfaceWorldSystem, SurfaceWorldSystem } from "@/lib/surface-world-system";
+import { LogisticsSystem } from "@/lib/transport-system";
+import { supplyChainManager } from "@/lib/supply-chain";
+import { SupplyChainRenderer } from "@/lib/supply-chain-renderer";
+import { RollingHazardSystem } from "@/lib/rolling-hazards";
+import { createWildlifeSystem, WildlifeSystem } from "@/lib/wildlife-system";
+import { LogFlumeSystem } from "@/lib/log-flume-system";
 
 type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
 
@@ -31,24 +38,84 @@ type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
 const _lookAheadPos = new THREE.Vector3();
 const _targetCenter = new THREE.Vector3();
 const _tempCamVec = new THREE.Vector3();
+const _factoryPos = new THREE.Vector3(0, 0, 105);
+const _jewelryPos = new THREE.Vector3(0, 0, 160);
+const _elevatorShaftPos = new THREE.Vector3(0, 0, 2);
+const _surfaceReceptionPos = new THREE.Vector3(0, 0, 102);
+const _warehousePos = new THREE.Vector3(-15, 0, 120);
+const _sortingBayPos = new THREE.Vector3(-18, 0, 107.5);
+const _tempVec = new THREE.Vector3();
+const _tempTargetPos = new THREE.Vector3();
 
 export default function DeepMiningApp() {
   const mountRef = useRef<HTMLDivElement>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   // Game Economy & 8500 Trillion Gems Mammoth Cave System
   const INITIAL_CAVE_GEMS = 8500000000000000;
   const STARTING_BACKPACK_CAPACITY = 13;
+  const DEFAULT_SURFACE_SPAWN = { x: 0, y: 0, z: 104 };
 
   const savedState = typeof window !== "undefined" ? saveSystem.load() : null;
+
+  // Resolve player spawn location & world state cleanly for new & returning games
+  const initialSpawnConfig = (() => {
+    if (!savedState) {
+      return {
+        worldState: "surface" as const,
+        location: "Surface Mining Outpost & Original Factory",
+        depthFeet: 0,
+        playerPos: { ...DEFAULT_SURFACE_SPAWN }
+      };
+    }
+
+    const isSavedAsCave = savedState.worldState === "mine" ||
+      (savedState.location && savedState.location.includes("Cave") && !savedState.location.includes("Outpost") && !savedState.location.includes("Surface"));
+
+    if (isSavedAsCave && savedState.playerPos) {
+      const { x, y, z } = savedState.playerPos;
+      if (typeof x === "number" && typeof y === "number" && typeof z === "number" && !isNaN(x) && !isNaN(y) && !isNaN(z) && z <= 20) {
+        return {
+          worldState: "mine" as const,
+          location: savedState.location || "Underground Cave Mine",
+          depthFeet: Math.max(100, savedState.depthFeet || 100),
+          playerPos: { x, y, z }
+        };
+      }
+    }
+
+    const isSavedAsSurface = savedState.worldState === "surface" ||
+      (savedState.location && (savedState.location.includes("Surface") || savedState.location.includes("Outpost") || savedState.location.includes("Factory")));
+
+    if (isSavedAsSurface && savedState.playerPos) {
+      const { x, y, z } = savedState.playerPos;
+      if (typeof x === "number" && typeof y === "number" && typeof z === "number" && !isNaN(x) && !isNaN(y) && !isNaN(z) && z >= 25) {
+        return {
+          worldState: "surface" as const,
+          location: savedState.location || "Surface Mining Outpost & Original Factory",
+          depthFeet: 0,
+          playerPos: { x, y, z }
+        };
+      }
+    }
+
+    // Default Fallback: Safe Surface Spawn Point
+    return {
+      worldState: "surface" as const,
+      location: "Surface Mining Outpost & Original Factory",
+      depthFeet: 0,
+      playerPos: { ...DEFAULT_SURFACE_SPAWN }
+    };
+  })();
 
   const [cash, setCash] = useState(savedState ? savedState.cash : 0);
   const [inventory, setInventory] = useState<Record<string, number>>(savedState?.inventory || {});
   const [jewelryInventory, setJewelryInventory] = useState<Record<string, number>>(savedState?.jewelryInventory || {});
   const [backpackCapacity, setBackpackCapacity] = useState(savedState?.backpackCapacity || STARTING_BACKPACK_CAPACITY);
-  const [location, setLocation] = useState(savedState?.location || "Underground Cave Mine");
-  const [depthFeet, setDepthFeet] = useState(savedState?.depthFeet || 100);
+  const [location, setLocation] = useState(initialSpawnConfig.location);
+  const [depthFeet, setDepthFeet] = useState(initialSpawnConfig.depthFeet);
   const [remainingCaveGems, setRemainingCaveGems] = useState(savedState?.remainingCaveGems || INITIAL_CAVE_GEMS);
-  const [showFactory, setShowFactory] = useState(false);
+  const [showFactory, setShowFactory] = useState(initialSpawnConfig.worldState === "surface");
   const [nearJewelryShop, setNearJewelryShop] = useState(false);
   const [factoryNotification, setFactoryNotification] = useState<string | null>(null);
 
@@ -103,6 +170,8 @@ export default function DeepMiningApp() {
   const currentCamLookAtRef = useRef(new THREE.Vector3(0, 1.2, -6));
   const accumulatedWagesRef = useRef(0);
   const lastWageCommitTimeRef = useRef(0);
+  const [nearFlume, setNearFlume] = useState(false);
+  const flumeSystemRef = useRef<LogFlumeSystem | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
 
@@ -124,22 +193,34 @@ export default function DeepMiningApp() {
       if (graphicsQuality === "performance") {
         renderer.setPixelRatio(1.0);
         renderer.shadowMap.enabled = false;
-        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 280;
+        if (scene.fog && scene.fog instanceof THREE.Fog) {
+          scene.fog.near = 10;
+          scene.fog.far = 180;
+        }
       } else if (graphicsQuality === "balanced") {
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.15));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.BasicShadowMap;
-        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 380;
+        if (scene.fog && scene.fog instanceof THREE.Fog) {
+          scene.fog.near = 25;
+          scene.fog.far = 320;
+        }
       } else if (graphicsQuality === "high") {
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 450;
+        if (scene.fog && scene.fog instanceof THREE.Fog) {
+          scene.fog.near = 30;
+          scene.fog.far = 450;
+        }
       } else if (graphicsQuality === "ultra") {
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        if (scene.fog && scene.fog instanceof THREE.Fog) scene.fog.far = 600;
+        if (scene.fog && scene.fog instanceof THREE.Fog) {
+          scene.fog.near = 40;
+          scene.fog.far = 700;
+        }
       }
     }
   }, [graphicsQuality]);
@@ -180,26 +261,14 @@ export default function DeepMiningApp() {
     drillBitTier: 0 // 0: Steel, 1: Titanium Carbide, 2: Diamond Core
   });
 
-
-
-  // Periodic Auto-Save
+  const upgradesRef = useRef(upgrades);
   useEffect(() => {
-    const interval = setInterval(() => {
-      saveSystem.save({
-        cash,
-        inventory,
-        jewelryInventory,
-        backpackCapacity,
-        depthFeet,
-        location,
-        remainingCaveGems,
-        upgrades,
-        hasCompletedTutorial: true,
-        savedAt: new Date().toISOString()
-      });
-    }, 12000);
-    return () => clearInterval(interval);
-  }, [cash, inventory, jewelryInventory, backpackCapacity, depthFeet, location, remainingCaveGems, upgrades]);
+    upgradesRef.current = upgrades;
+  }, [upgrades]);
+
+
+
+
 
   // Automatic Proximity State
   const [isAutoDrilling, setIsAutoDrilling] = useState(false);
@@ -209,7 +278,7 @@ export default function DeepMiningApp() {
 
   // Mutable refs for state guarding in 60fps loop
   const drillControllerRef = useRef(new GemDrillController());
-  const elevatorStateRef = useRef<ElevatorState>("mine");
+  const elevatorStateRef = useRef<ElevatorState>(initialSpawnConfig.worldState);
   const backpackCapRef = useRef(STARTING_BACKPACK_CAPACITY);
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const worldRef = useRef<ReturnType<typeof buildMiningWorld> | null>(null);
@@ -220,19 +289,9 @@ export default function DeepMiningApp() {
   const playerGroupRef = useRef<THREE.Group | null>(null);
   const megaCaveSystemRef = useRef<MegaCaveSystem | null>(null);
   const surfaceSystemRef = useRef<SurfaceWorldSystem | null>(null);
+  const rollingHazardRef = useRef<RollingHazardSystem | null>(null);
 
-  const handleTeleportToElevator = useCallback(() => {
-    if (!playerGroupRef.current) return;
-    const state = elevatorStateRef.current;
-    if (state === "mine") {
-      const targetPos = new THREE.Vector3(0, 0, 6);
-      const groundY = megaCaveSystemRef.current ? megaCaveSystemRef.current.getGroundHeight(targetPos) : 0;
-      playerGroupRef.current.position.set(0, groundY, 6);
-    } else if (state === "surface") {
-      playerGroupRef.current.position.set(0, 0, 104);
-    }
-    soundManager.playCashRegister();
-  }, []);
+
 
   // Tracking refs for zero-re-render calculations
   const totalMinedRef = useRef(0);
@@ -504,15 +563,48 @@ export default function DeepMiningApp() {
     });
     megaCaveSystemRef.current = megaCaveSystem;
 
+    // Instantiate Cave Wildlife System (Bats, Spiders, Worms, Centipedes)
+    const wildlifeSystem = createWildlifeSystem(scene, megaCaveSystem);
+
     // Instantiate Surface World Streaming System
     const surfaceSystem = createSurfaceWorldSystem(scene);
     surfaceSystemRef.current = surfaceSystem;
 
+    // Synchronize initial elevator doors & position matching world state
+    if (initialSpawnConfig.worldState === "surface") {
+      world.elevatorGroup.position.z = 100;
+      world.elevatorDoors[0].position.x = -2.1;
+      world.elevatorDoors[1].position.x = 2.1;
+      soundManager.setMusicZone("surface");
+      soundManager.playMusic("country", true);
+    } else {
+      world.elevatorGroup.position.z = 2;
+      world.elevatorDoors[0].position.x = -2.1;
+      world.elevatorDoors[1].position.x = 2.1;
+      soundManager.setMusicZone("cave");
+      soundManager.playMusic("country", false);
+    }
+
+    // Determine exact grounded Y elevation AFTER surface & cave collision systems are initialized
+    const groundY = initialSpawnConfig.worldState === "mine"
+      ? megaCaveSystem.getGroundHeight(new THREE.Vector3(initialSpawnConfig.playerPos.x, 0, initialSpawnConfig.playerPos.z))
+      : surfaceSystem.getGroundHeight(new THREE.Vector3(initialSpawnConfig.playerPos.x, 0, initialSpawnConfig.playerPos.z));
+
+    const finalSpawnX = initialSpawnConfig.playerPos.x;
+    const finalSpawnZ = initialSpawnConfig.playerPos.z;
+    const finalSpawnY = Math.max(groundY, typeof initialSpawnConfig.playerPos.y === "number" && !isNaN(initialSpawnConfig.playerPos.y) ? initialSpawnConfig.playerPos.y : groundY);
+
     // Build Player Character Rig
     const playerGroup = new THREE.Group();
-    playerGroup.position.set(0, 0, -6);
+    playerGroup.position.set(finalSpawnX, finalSpawnY, finalSpawnZ);
+    playerGroup.rotation.y = 0; // Proper starting orientation
     scene.add(playerGroup);
     playerGroupRef.current = playerGroup;
+
+    // Focus camera lookAt target directly on initial player spawn point
+    currentCamLookAtRef.current.set(finalSpawnX, finalSpawnY + 1.25, finalSpawnZ);
+    camera.position.set(finalSpawnX, finalSpawnY + 4.5, finalSpawnZ + 8.5);
+    camera.lookAt(currentCamLookAtRef.current);
 
     // Player Body Parts
     const bodyMesh = new THREE.Mesh(
@@ -629,10 +721,29 @@ export default function DeepMiningApp() {
     const managementOffice = createManagementOfficeBuilding(scene, new THREE.Vector3(0, 0, 135));
     managementOfficeRef.current = managementOffice;
 
-    // 3D Physical Animated Worker Renderer
+    // 3. Physical Supply Chain & Logistics System
+    const logisticsSystem = new LogisticsSystem(scene);
+    const supplyChainRenderer = new SupplyChainRenderer(scene);
+
+    // 4. 3D Physical Animated Worker Renderer
     const workerRenderer = createWorkerRenderer(scene);
     workerRenderer.updateWorkers(managementSystem.getWorkers());
     workerRendererRef.current = workerRenderer;
+
+    const rollingHazardSystem = new RollingHazardSystem(scene);
+    rollingHazardRef.current = rollingHazardSystem;
+
+    // Instantiate Log Flume System
+    const flumeSystem = new LogFlumeSystem({
+      scene,
+      camera,
+      onRideStart: () => {
+        achievementsSystem.updateProgress("log_flume_rider", 1, (reward) => {
+          setCash(c => c + reward);
+        });
+      }
+    });
+    flumeSystemRef.current = flumeSystem;
 
     // Wire Gem Collection Discovery hook to all ore deposits for Gem Encyclopedia & Achievements
     world.deposits.forEach(deposit => {
@@ -654,11 +765,27 @@ export default function DeepMiningApp() {
 
     const joystickContainer = document.createElement("div");
     joystickContainer.style.cssText =
-      "position:absolute;bottom:28px;left:28px;width:120px;height:120px;border-radius:50%;background:rgba(15,23,42,0.7);border:2px solid rgba(56,189,248,0.5);touch-action:none;z-index:50;backdrop-filter:blur(6px);box-shadow:0 10px 25px rgba(0,0,0,0.5);";
+      "position:absolute;bottom:32px;left:32px;width:130px;height:130px;border-radius:50%;background:radial-gradient(circle, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.9) 70%, rgba(2,6,23,0.95) 100%);border:3px solid rgba(148,163,184,0.4);touch-action:none;z-index:50;box-shadow:inset 0 6px 12px rgba(0,0,0,0.8), 0 10px 25px rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;";
+    
+    // Outer metallic textured thumbstick ring (Xbox style)
+    const thumbstickBase = document.createElement("div");
+    thumbstickBase.style.cssText =
+      "position:absolute;width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg, #334155 0%, #0f172a 100%);box-shadow:inset 0 4px 8px rgba(0,0,0,0.9), 0 2px 4px rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;";
+    joystickContainer.appendChild(thumbstickBase);
+
+    // Convex textured rubber thumbgrip cap (Xbox style concave/convex grip ring)
     const joystickKnob = document.createElement("div");
     joystickKnob.style.cssText =
-      "position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,#38bdf8,#0284c7);box-shadow:0 4px 12px rgba(0,0,0,0.4);border:2px solid #ffffff;";
-    joystickContainer.appendChild(joystickKnob);
+      "position:absolute;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle, #475569 0%, #1e293b 65%, #0f172a 100%);box-shadow:0 6px 12px rgba(0,0,0,0.7), inset 0 2px 3px rgba(255,255,255,0.25), inset 0 -4px 6px rgba(0,0,0,0.8);border:2px solid rgba(100,116,139,0.6);transition:transform 0.05s ease-out;";
+    
+    // Grippy outer ridges (Xbox thumbstick concentric dot pattern simulation)
+    for (let r = 0; r < 2; r++) {
+      const gripRing = document.createElement("div");
+      gripRing.style.cssText = `position:absolute;width:${50 - r * 12}px;height:${50 - r * 12}px;border-radius:50%;border:1px dashed rgba(148,163,184,0.3);pointer-events:none;`;
+      joystickKnob.appendChild(gripRing);
+    }
+
+    thumbstickBase.appendChild(joystickKnob);
     mount.appendChild(joystickContainer);
 
     const handlePointerMove = (e: PointerEvent) => {
@@ -912,6 +1039,8 @@ export default function DeepMiningApp() {
     let animationFrameId = 0;
     let lastFactoryUnloadTime = 0;
     let lastAchievementCheckTime = 0;
+    let lastInventoryUpdateTime = 0;
+    let lastSimulationTime = 0;
 
     const animate = (now: number) => {
       const dt = Math.min((now - previousTime) / 1000, 0.05);
@@ -924,7 +1053,7 @@ export default function DeepMiningApp() {
       // 1. HYPER-SPEED ELEVATOR LOCOMOTION
       // --------------------------------------------------
       if (state === "traveling-up" || state === "traveling-down") {
-        const currentSpeed = upgrades.elevatorSpeed;
+        const currentSpeed = upgradesRef.current.elevatorSpeed;
         elevatorProgress += (currentSpeed * dt) / ELEVATOR_TRAVEL_DISTANCE;
 
         soundManager.playHyperElevatorSound(true, elevatorProgress);
@@ -1001,79 +1130,70 @@ export default function DeepMiningApp() {
         const targetX = playerGroup.position.x + worldDirX * dt * moveSpeed * clampedInputLen;
         const targetZ = playerGroup.position.z + worldDirZ * dt * moveSpeed * clampedInputLen;
         
-        // --- LOOK AHEAD COLLISION ---
-        const targetPos = new THREE.Vector3(targetX, playerGroup.position.y, targetZ);
-        const targetGroundY = state === "mine" 
-          ? megaCaveSystem.getGroundHeight(targetPos)
-          : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0);
-          
-        const heightDiff = targetGroundY - playerGroup.position.y;
-        const isWall = heightDiff > 0.65; 
-        
-        if (!isWall || keys["g"]) {
-          playerGroup.position.x = targetX;
-          playerGroup.position.z = targetZ;
-        }
+        // Allow seamless exploration without invisible boundary blocks or walls
+        playerGroup.position.x = targetX;
+        playerGroup.position.z = targetZ;
 
-        // Shortest-path player orientation facing the exact direction of travel
-        const targetRotY = Math.atan2(worldDirX, -worldDirZ);
-        let rotDiff = targetRotY - playerGroup.rotation.y;
-        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-        playerGroup.rotation.y += rotDiff * Math.min(1, 14 * dt);
+        // Shortest-path player orientation facing the exact direction of travel using Quaternions
+        const targetQuaternion = new THREE.Quaternion();
+        const direction = new THREE.Vector3(worldDirX, 0, worldDirZ).normalize();
+        const targetRotation = new THREE.Euler(0, Math.atan2(direction.x, direction.z), 0);
+        targetQuaternion.setFromEuler(targetRotation);
+        
+        playerGroup.quaternion.slerp(targetQuaternion, Math.min(1, 10 * dt));
       }
 
       // Update World Chunk Streaming based on player position
       megaCaveSystem.update(playerGroup.position, dt);
       surfaceSystemRef.current?.update(playerGroup.position, dt);
+      wildlifeSystem.update(dt, playerGroup.position, state === "mine");
+      
+      // Rolling Hazards Update
+      if (rollingHazardRef.current) {
+        rollingHazardRef.current.update(dt, playerGroup.position);
+        // Random hazard spawn in corridors
+        if (state === "mine" && Math.random() < 0.001) {
+            const spawnPos = new THREE.Vector3((Math.random()-0.5)*20, 2, playerGroup.position.z - 100);
+            const dir = new THREE.Vector3(0, 0, 1);
+            rollingHazardRef.current.spawnHazard(spawnPos, dir);
+        }
+      }
+      
       const activeDeposits = [...world.deposits, ...megaCaveSystem.getDeposits()];
 
-      // ADVANCED GROUND COLLISION & STEP-UP LOGIC
-      if (state === "mine" || state === "surface") {
-            const groundY = state === "mine" 
-              ? megaCaveSystem.getGroundHeight(playerGroup.position)
-              : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
-            
-            const isFlying = keys["g"];
-            const isGrounded = playerGroup.position.y <= groundY + 0.1;
-
-            if (isFlying) {
-                // Jetpack Flight: Move up/down while G is held
-                if (keys["w"] || keys["arrowup"] || keys["arrowleft"] || keys["arrowright"] || keys["s"] || keys["arrowdown"]) {
-                    playerGroup.position.y += dt * 8.5; 
-                }
-                // Altitude safety cap
-                playerGroup.position.y = Math.min(playerGroup.position.y, groundY + 150);
-            } else {
-                // Jump mechanic - Space key
-                if (keys[" "] && isGrounded) {
-                    playerGroup.position.y += 0.45; // Enhanced jump impulse
-                }
-
-                // RIGID GROUND CONSTRAINT with Step-Up support
-                if (playerGroup.position.y < groundY) {
-                    // Force snap to ground if below it
-                    playerGroup.position.y = groundY;
-                } else if (playerGroup.position.y > groundY) {
-                    // Gravity damping
-                    const fallSpeed = isGrounded ? 32 : 18; // Snap faster when close to ground
-                    playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, fallSpeed, dt);
-                }
-                
-                // Final micro-snap to eliminate jitter on slopes
-                if (Math.abs(playerGroup.position.y - groundY) < 0.05) {
-                    playerGroup.position.y = groundY;
-                }
-            }
-
-        if (state === "mine") {
-            const regionInfo = megaCaveSystem.getRegionInfo(playerGroup.position);
-            setLocationGuarded(regionInfo.name);
-            setDepthGuarded(regionInfo.depthFeet);
+      // RIGID GROUNDING & FOOT-TO-TERRAIN SNAPPING (NO FLYING, NO FLOATING)
+      if ((state === "mine" || state === "surface") && (playerGroup.position.y < 90 || playerGroup.position.y > 95)) {
+        const groundY = state === "mine" 
+          ? megaCaveSystem.getGroundHeight(playerGroup.position)
+          : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
+        
+        // Strict foot-to-ground alignment - no flying or hovering
+        if (playerGroup.position.y < groundY + 0.1) {
+          // Ground snapping
+          playerGroup.position.y = THREE.MathUtils.lerp(playerGroup.position.y, groundY, Math.min(1, dt * 24));
+          
+          // Optional jump impulse from ground
+          if (keys[" "]) {
+            playerGroup.position.y += 0.35;
+          }
         } else {
-            if (playerGroup.position.z < 130) setLocationGuarded("Surface Mining Outpost & Original Factory");
-            else setLocationGuarded("Infinite Surface Wilderness Exploration");
+          // Gravity pull to return player to ground smoothly
+          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, 35, dt);
         }
+
+        // Hard ground ceiling snap - player can never clip below ground level
+        if (playerGroup.position.y < groundY) {
+          playerGroup.position.y = groundY;
+        }
+      }
+
+      if (state === "mine") {
+          const regionInfo = megaCaveSystem.getRegionInfo(playerGroup.position);
+          setLocationGuarded(regionInfo.name);
+          setDepthGuarded(regionInfo.depthFeet);
+      } else {
+          if (playerGroup.position.z < 130) setLocationGuarded("Surface Mining Outpost & Original Factory");
+          else setLocationGuarded("Infinite Surface Wilderness Exploration");
       }
 
       // Proximity Triggers
@@ -1149,63 +1269,47 @@ export default function DeepMiningApp() {
       }
 
       // --------------------------------------------------
-      // 3. AUTOMATIC DRILLING MECHANICS (+22% BOOSTED POWER)
+      // 3. DRILLING & INTERACTION LOGIC
       // --------------------------------------------------
       let nearbyTargetDeposit: GemOreDeposit | null = null;
       let minDistance = Infinity;
-
-      if (state === "mine") {
-        for (const deposit of activeDeposits) {
-          if (deposit.broken) continue;
-          const dist = playerGroup.position.distanceTo(deposit.group.position);
-          if (dist < minDistance) {
-            minDistance = dist;
-            nearbyTargetDeposit = deposit;
-          }
-        }
-      }
-
-      const autoDrilling = state === "mine" && nearbyTargetDeposit !== null && minDistance < 4.5;
-      setIsAutoDrillingGuarded(autoDrilling);
-      soundManager.playDrillSound(autoDrilling, drillControllerRef.current.speed);
-
-      // Animate 3D MAXPOWER Cordless Drill Rig (Chuck spin, vibration, LED & sparks)
-      maxPowerDrill.update(dt, autoDrilling);
-
-      if (autoDrilling && nearbyTargetDeposit) {
-        const rockBroke = drillControllerRef.current.drill(nearbyTargetDeposit, dt);
-        soundManager.playRockCrunch();
-
-        if (rockBroke) {
-          soundManager.playGemChime(0.5);
-          setRemainingCaveGems(prev => Math.max(0, prev - 250));
-        }
-      }
 
       // --------------------------------------------------
       // 4. LOOSE GEM DROPS, REGENERATION & AUTOMATIC PICKUP
       // --------------------------------------------------
       let currentTotalGemsInBackpack = 0;
-      // Faster sum of inventory
       for (const [_, count] of Object.entries(inventory)) {
         currentTotalGemsInBackpack += count;
       }
 
       let anyPickedUp = false;
+
+      // OPTIMIZED PASS: Combined drilling target search and physical drop simulation
       for (const deposit of activeDeposits) {
-        deposit.updateDrops(dt, playerGroup.position.y + 0.15);
+        const distToPlayer = deposit.group.position.distanceTo(playerGroup.position);
+        
+        // 1. Find Nearest Drillable Target (only if in mine)
+        if (state === "mine" && !deposit.broken && distToPlayer < minDistance) {
+          minDistance = distToPlayer;
+          nearbyTargetDeposit = deposit;
+        }
 
-        if (state === "mine") {
-          const pickedUp = deposit.collectNear(
-            playerGroup.position,
-            2.8,
-            backpackCapRef.current,
-            currentTotalGemsInBackpack
-          );
+        // 2. Physical Drop Simulation & Collection (Distance Culled)
+        if (distToPlayer < 80 || (deposit.broken && distToPlayer < 150)) {
+          deposit.updateDrops(dt, playerGroup.position.y + 0.15);
 
-          if (pickedUp > 0) {
-            anyPickedUp = true;
-            currentTotalGemsInBackpack += pickedUp;
+          if (state === "mine" && distToPlayer < 4.5) {
+            const pickedUp = deposit.collectNear(
+              playerGroup.position,
+              2.8,
+              backpackCapRef.current,
+              currentTotalGemsInBackpack
+            );
+
+            if (pickedUp > 0) {
+              anyPickedUp = true;
+              currentTotalGemsInBackpack += pickedUp;
+            }
           }
         }
       }
@@ -1219,71 +1323,76 @@ export default function DeepMiningApp() {
             if (cnt > 0) newOverallInventory[id] = (newOverallInventory[id] ?? 0) + cnt;
           });
         });
-        setInventory(newOverallInventory);
+        
+        // Throttled UI update
+        if (now - lastInventoryUpdateTime > 150) {
+          setInventory(newOverallInventory);
+          lastInventoryUpdateTime = now;
+        }
+      }
+
+      const autoDrilling = state === "mine" && nearbyTargetDeposit !== null && minDistance < 4.5;
+      setIsAutoDrillingGuarded(autoDrilling);
+      soundManager.playDrillSound(autoDrilling, drillControllerRef.current.speed);
+
+      // Animate 3D MAXPOWER Cordless Drill Rig
+      maxPowerDrill.update(dt, autoDrilling);
+
+      if (autoDrilling && nearbyTargetDeposit) {
+        const rockBroke = drillControllerRef.current.drill(nearbyTargetDeposit, dt);
+        soundManager.playRockCrunch();
+
+        if (rockBroke) {
+          soundManager.playGemChime(0.5);
+          setRemainingCaveGems(prev => Math.max(0, prev - 250));
+        }
       }
 
       // Update 3D Backpack Gem Tower
       updateBackpackGemTower(currentTotalGemsInBackpack);
 
       // --------------------------------------------------
-      // 5. SILKY SMOOTH 3RD-PERSON ORBIT FOLLOW CAMERA
+      // 5. IMPROVED 3RD-PERSON ORBIT FOLLOW CAMERA
       // --------------------------------------------------
-      const targetCenter = new THREE.Vector3(
-        playerGroup.position.x,
-        playerGroup.position.y + 1.25,
-        playerGroup.position.z
-      );
-
+      // Calculate desired camera position based on player, yaw, pitch, and distance
       const pitch = THREE.MathUtils.clamp(cameraPitchRef.current, -0.35, 0.95);
       const dist = THREE.MathUtils.clamp(cameraDistanceRef.current, 3.8, 18.0);
+      
       const horizDist = dist * Math.cos(pitch);
       const vertDist = dist * Math.sin(pitch);
 
       const offX = horizDist * Math.sin(camYaw);
       const offZ = horizDist * Math.cos(camYaw);
-      const offY = vertDist;
+      const offY = vertDist + 1.25; // Base height above player center
 
-      let targetCamX = targetCenter.x + offX;
-      let targetCamY = targetCenter.y + offY + (state === "mine" ? 1.0 : 1.8);
-      let targetCamZ = targetCenter.z + offZ;
+      // Target camera position
+      const targetCamPos = new THREE.Vector3(
+        playerGroup.position.x + offX,
+        playerGroup.position.y + offY,
+        playerGroup.position.z + offZ
+      );
 
-      // Ground & ceiling collision checks to prevent camera clipping
-      if (state === "mine") {
-        const groundAtCam = megaCaveSystem.getGroundHeight(new THREE.Vector3(targetCamX, 0, targetCamZ)) + 0.85;
-        if (targetCamY < groundAtCam) targetCamY = groundAtCam;
+      // Smoothly update camera position using damp
+      camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamPos.x, 8, dt);
+      camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamPos.y, 8, dt);
+      camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamPos.z, 8, dt);
 
-        const baseElev = MAMMOTH_CAVE_GENERATOR.getBaseElevation(targetCamX, targetCamZ);
-        const carving = MAMMOTH_CAVE_GENERATOR.getCarving(targetCamX, targetCamZ);
-        const smoothY = getSmoothTargetY(targetCamZ);
-        const ceilAtCam = smoothY + baseElev + Math.max(0.15, carving) * MAMMOTH_CAVE_GENERATOR.baseHeight - 0.85;
-        if (targetCamY > ceilAtCam) targetCamY = ceilAtCam;
-      } else {
-        const groundAtCam = (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(new THREE.Vector3(targetCamX, 0, targetCamZ)) : 0) + 1.0;
-        if (targetCamY < groundAtCam) targetCamY = groundAtCam;
-      }
+      // Target lookAt point
+      const lookAtPos = new THREE.Vector3(
+        playerGroup.position.x,
+        playerGroup.position.y + 1.25,
+        playerGroup.position.z
+      );
 
-      // Drilling Camera Shake
-      if (autoDrilling) {
-        const shake = 0.035;
-        targetCamX += (Math.random() - 0.5) * shake;
-        targetCamY += (Math.random() - 0.5) * shake;
-        targetCamZ += (Math.random() - 0.5) * shake;
-      }
-
-      camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamX, 10, dt);
-      camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamY, 10, dt);
-      camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamZ, 10, dt);
-
-      currentCamLookAtRef.current.x = THREE.MathUtils.damp(currentCamLookAtRef.current.x, targetCenter.x, 14, dt);
-      currentCamLookAtRef.current.y = THREE.MathUtils.damp(currentCamLookAtRef.current.y, targetCenter.y, 14, dt);
-      currentCamLookAtRef.current.z = THREE.MathUtils.damp(currentCamLookAtRef.current.z, targetCenter.z, 14, dt);
-
+      // Smoothly update lookAt point
+      currentCamLookAtRef.current.lerp(lookAtPos, 15 * dt);
       camera.lookAt(currentCamLookAtRef.current);
+      
       playerLight.position.set(playerGroup.position.x, playerGroup.position.y + 4.5, playerGroup.position.z);
 
       // Update 400-Meter Dual Spotlight Headlamp parameters
       const lampMult = headlampOnRef.current ? headlampPowerRef.current : 0;
-      const opticsMult = upgrades.headlampOptics || 1.0;
+      const opticsMult = upgradesRef.current.headlampOptics || 1.0;
 
       coreSpotlight.distance = 400 * opticsMult;
       coreSpotlight.intensity = 120 * lampMult * opticsMult;
@@ -1302,20 +1411,34 @@ export default function DeepMiningApp() {
         setNearJewelryShop(isNearJewelryShop);
       }
 
+      if (flumeSystemRef.current) {
+        flumeSystemRef.current.update(dt, playerGroup.position);
+        const distToBoarding = playerGroup.position.distanceTo(flumeSystemRef.current.boardingPosition);
+        const isNearFlume = distToBoarding < 8.0 && state === "mine";
+        setNearFlume(isNearFlume);
+      }
+
       // Update Audio Zone based on player coordinates
       if (state === "mine") {
         soundManager.setMusicZone("cave");
+        soundManager.playMusic("country", false);
+        soundManager.playAmbientSound("caveWind", true);
+        soundManager.playAmbientSound("waterDrip", true);
       } else if (state === "surface") {
+        soundManager.playAmbientSound("caveWind", false);
+        soundManager.playAmbientSound("waterDrip", false);
         if (playerGroup.position.z < 120) {
           soundManager.setMusicZone("surface");
+          soundManager.playMusic("country", true);
         } else if (playerGroup.position.z < 260) {
           soundManager.setMusicZone("factory");
+          soundManager.playMusic("country", false);
         } else {
           soundManager.setMusicZone("jewelry");
+          soundManager.playMusic("country", false);
         }
       }
 
-      // Worker Wages deduction & financial rate calculation (Throttled to eliminate 60 FPS React re-renders)
       const wageDeduction = managementSystem.tickWages(dt);
       accumulatedWagesRef.current += wageDeduction;
       if (accumulatedWagesRef.current >= 1.0 || (now - lastWageCommitTimeRef.current > 1000 && accumulatedWagesRef.current > 0.05)) {
@@ -1323,6 +1446,8 @@ export default function DeepMiningApp() {
         if (toDeduct > 0) {
           accumulatedWagesRef.current -= toDeduct;
           lastWageCommitTimeRef.current = now;
+          
+          // Throttled UI update (Cash is usually updated together with inventory or wages)
           setCash(prev => {
             const next = Math.max(0, prev - toDeduct);
             cashRef.current = next;
@@ -1357,19 +1482,111 @@ export default function DeepMiningApp() {
 
       world.updateWorld(dt);
       managementOffice.update(dt);
-      workerRenderer.update(dt);
       
       // Update global rock debris fragments
       GemOreDeposit.updateGlobalDebris(dt);
 
 
-      // Business upgrade multipliers applied to factory processing lines
-      const conveyorMult = managementSystem.getConveyorSpeedMultiplier();
+      // --------------------------------------------------
+      // 6. INDUSTRIAL SUPPLY CHAIN SIMULATION (Throttled to 10Hz)
+      // --------------------------------------------------
+      logisticsSystem.update(dt);
+      supplyChainRenderer.update();
+
+      const currentAvailCart = logisticsSystem.getAvailableCart();
+      const dynamicPositions: Record<string, THREE.Vector3> = {
+        "Mine Cart Station A": currentAvailCart ? currentAvailCart.group.position : _sortingBayPos,
+        "Elevator Loading Bay": _tempVec.copy(world.elevatorGroup.position).add(_elevatorShaftPos),
+        "Surface Receiving": _surfaceReceptionPos,
+        "Warehouse A": _warehousePos,
+        "Sorting Bay": _sortingBayPos
+      };
+
+      if (now - lastSimulationTime > 100) {
+        lastSimulationTime = now;
+        const simDt = 0.1; // Consistent simulation step
+
+        // Chain logic: Extraction -> Collection -> Cart -> Elevator -> Surface -> Factory
+        const workers = managementSystem.getWorkers();
+        
+        // Step 1: Underground Mining (Workers at deposits)
+        const miners = workers.filter(w => w.role === "miner" && w.status === "working");
+        miners.forEach(m => {
+          const workerPos = dynamicPositions[m.assignedMachine] || MACHINE_POSITIONS[m.assignedMachine];
+          if (!workerPos) return;
+
+          const depositsInArea = activeDeposits.filter(d => !d.broken && d.group.position.distanceTo(workerPos) < 15);
+          if (depositsInArea.length > 0) {
+            const targetD = depositsInArea[0];
+            const mined = targetD.drill(m.productivity * 5 * simDt);
+            if (mined) {
+              supplyChainManager.addGemToNode(GAME_GEMS[Math.floor(Math.random() * 3)], "underground_extraction", targetD.group.position);
+            }
+          }
+        });
+
+        // Step 2: Collection & Cart Handling
+        const availCart = logisticsSystem.getAvailableCart();
+        if (availCart) {
+          const gemsToLoad = supplyChainManager.getGemsAtNode("underground_extraction");
+          if (gemsToLoad.length > 0) {
+            const g = gemsToLoad[0];
+            if (availCart.addGem(g.type)) {
+              supplyChainManager.transferGem(g.id, "mining_cart_transit");
+            }
+          }
+        }
+
+        const unloadingCart = logisticsSystem.getUnloadingCart();
+        if (unloadingCart) {
+          const gems = unloadingCart.unloadAll();
+          gems.forEach(gType => {
+            supplyChainManager.addGemToNode(gType, "elevator_shaft", _elevatorShaftPos);
+          });
+        }
+
+        // Step 3: Elevator Transfer
+        if (state === "surface" && elevatorProgress >= 0.9) {
+          const gemsInElevator = supplyChainManager.getGemsAtNode("elevator_shaft");
+          gemsInElevator.forEach(g => {
+            supplyChainManager.transferGem(g.id, "surface_reception");
+            supplyChainManager.updateGemPos(g.id, _surfaceReceptionPos);
+          });
+        }
+
+        // Step 4: Factory Input
+        const transporters = workers.filter(w => w.role === "transporter" && w.status === "working");
+        const surfaceTransporters = transporters.filter(t => t.assignedFacility === "transport_logistics");
+        if (surfaceTransporters.length > 0) {
+          const gemsAtSurface = supplyChainManager.getGemsAtNode("surface_reception");
+          if (gemsAtSurface.length > 0) {
+            const g = gemsAtSurface[0];
+            factoryEngine.addGem(g.type);
+            supplyChainManager.removeGem(g.id);
+          }
+        }
+      }
+
       const machineMult = managementSystem.getMachineSpeedMultiplier();
-      factoryEngine.update(dt * conveyorMult * machineMult);
+      
+      const distToFactory = playerGroup.position.distanceTo(_factoryPos);
+      const distToJewelry = playerGroup.position.distanceTo(_jewelryPos);
+      
+      const factoryVisible = state === "surface" && distToFactory < 120;
+      const jewelryVisible = state === "surface" && distToJewelry < 120;
+      
+      factoryEngine.setVisible(factoryVisible);
+      factoryEngine.update(dt * machineMult);
+      
       if (jewelryFactoryRef.current) {
+        jewelryFactoryRef.current.setVisible(jewelryVisible);
         jewelryFactoryRef.current.update(dt * machineMult);
       }
+      
+      managementOffice.group.visible = state === "surface" && playerGroup.position.distanceTo(managementOffice.group.position) < 150;
+
+      workerRenderer.update(dt, dynamicPositions, playerGroup.position);
+      
       renderer.render(scene, camera);
       animationFrameId = requestAnimationFrame(animate);
     };
@@ -1413,11 +1630,15 @@ export default function DeepMiningApp() {
       renderer.dispose();
       world.disposeWorld();
       megaCaveSystem.dispose();
+      wildlifeSystem.dispose();
       surfaceSystemRef.current?.dispose();
       factoryEngine.dispose();
       workerRenderer.dispose();
       managementOffice.dispose();
       maxPowerDrill.dispose();
+      logisticsSystem.dispose();
+      supplyChainRenderer.dispose();
+      flumeSystemRef.current?.dispose();
       if (jewelryFactoryRef.current) {
         jewelryFactoryRef.current.dispose();
       }
@@ -1425,7 +1646,48 @@ export default function DeepMiningApp() {
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       if (mount.contains(joystickContainer)) mount.removeChild(joystickContainer);
     };
-  }, [upgrades.elevatorSpeed, handleToggleHeadlamp, upgrades.headlampOptics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array to ensure the game loop starts once and stays alive
+
+  // Periodic Auto-Save
+  useEffect(() => {
+    const interval = setInterval(() => {
+      saveSystem.save({
+        cash,
+        inventory,
+        jewelryInventory,
+        backpackCapacity,
+        depthFeet,
+        location,
+        remainingCaveGems,
+        upgrades,
+        hasCompletedTutorial: true,
+        savedAt: new Date().toISOString(),
+        playerPos: playerGroupRef.current ? {
+          x: playerGroupRef.current.position.x,
+          y: playerGroupRef.current.position.y,
+          z: playerGroupRef.current.position.z
+        } : undefined,
+        worldState: elevatorStateRef.current === "mine" ? "mine" : "surface"
+      });
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [cash, inventory, jewelryInventory, backpackCapacity, depthFeet, location, remainingCaveGems, upgrades]);
+
+  const handleTeleportToElevator = useCallback(() => {
+    if (!playerGroupRef.current) return;
+    const state = elevatorStateRef.current;
+    if (state === "mine") {
+      const targetPos = new THREE.Vector3(0, 0, 6);
+      const groundY = megaCaveSystemRef.current ? megaCaveSystemRef.current.getGroundHeight(targetPos) : 0;
+      playerGroupRef.current.position.set(0, groundY, 6);
+    } else if (state === "surface") {
+      const targetPos = new THREE.Vector3(0, 0, 104);
+      const groundY = surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0;
+      playerGroupRef.current.position.set(0, groundY, 104);
+    }
+    soundManager.playCashRegister();
+  }, []);
 
   const handleSellJewelry = useCallback((productId: string) => {
     if (jewelryFactoryRef.current) {
@@ -1494,6 +1756,16 @@ export default function DeepMiningApp() {
         onOpenStatistics={() => setIsStatisticsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         nearOffice={nearOffice}
+        nearFlume={nearFlume}
+        onBoardFlume={() => {
+          if (flumeSystemRef.current) {
+            if (flumeSystemRef.current.isPlayerBoarded) {
+              flumeSystemRef.current.exitPlayer();
+            } else {
+              flumeSystemRef.current.boardPlayer();
+            }
+          }
+        }}
         achievementToast={achievementToast}
         onRotateCameraLeft={() => {
           cameraYawRef.current += 0.35;
@@ -1576,6 +1848,8 @@ export default function DeepMiningApp() {
         isEngineReady={isEngineReady}
         onEnterGame={() => setIsLoadingScreen(false)}
       />
+
+      {showDiagnostics && <AudioDiagnostics />}
     </div>
   );
 }

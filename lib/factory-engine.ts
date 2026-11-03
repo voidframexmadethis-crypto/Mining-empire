@@ -192,7 +192,17 @@ export function createSurfaceFactory(
     }
   }
 
-  // 3. INTAKE HOPPER & FINISHED GEM COLLECTOR VAULT
+  // 3. INTAKE HOPPER, SORTING BAY & FINISHED GEM COLLECTOR VAULT
+  // Sorting Bay (Near entrance X: -18)
+  const sortingBay = new THREE.Group();
+  sortingBay.position.set(-18, 0, 2.5);
+  root.add(sortingBay);
+  addBox(sortingBay, 0, 0.4, 0, 6, 0.8, 6, gunmetal);
+  // Rollers for sorting
+  for(let i=0; i<5; i++) {
+    addCylinder(sortingBay, -2.5+i*1.2, 0.9, 0, 0.15, 5, chrome, "z");
+  }
+
   // Intake Hopper (Left X: -13)
   const hopper = new THREE.Group();
   hopper.position.set(-13, 1.2, 2.5);

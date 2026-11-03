@@ -19,6 +19,8 @@ export type GameSaveState = {
   };
   hasCompletedTutorial: boolean;
   savedAt: string;
+  playerPos?: { x: number; y: number; z: number };
+  worldState?: "surface" | "mine";
 };
 
 const SAVE_KEY = "mining_empire_save_state_v2";

@@ -50,6 +50,8 @@ type MiningHUDProps = {
   onOpenStatistics: () => void;
   onOpenSettings: () => void;
   nearOffice: boolean;
+  nearFlume?: boolean;
+  onBoardFlume?: () => void;
   achievementToast: { title: string; description: string; rewardCash: number; icon: string } | null;
   onRotateCameraLeft?: () => void;
   onRotateCameraRight?: () => void;
@@ -91,6 +93,8 @@ export default function MiningHUD({
   onOpenStatistics,
   onOpenSettings,
   nearOffice,
+  nearFlume,
+  onBoardFlume,
   achievementToast,
   onRotateCameraLeft,
   onRotateCameraRight,
@@ -189,233 +193,192 @@ export default function MiningHUD({
     ? `${(remainingCaveGems / 1e6).toFixed(0)}M GEMS`
     : `${remainingCaveGems.toLocaleString()} GEMS`;
 
+  const [showMoneyPopup, setShowMoneyPopup] = useState(false);
+  const [showMenuPopup, setShowMenuPopup] = useState(false);
+  const moneyTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const menuTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const prevCashRef = React.useRef(cash);
+  const prevGemsRef = React.useRef(totalGemsCount);
+
+  // Auto-pop Money Interface for 5 seconds when cash/gems change or when requested
+  const triggerMoneyPopup = React.useCallback(() => {
+    setShowMoneyPopup(true);
+    if (moneyTimerRef.current) clearTimeout(moneyTimerRef.current);
+    moneyTimerRef.current = setTimeout(() => {
+      setShowMoneyPopup(false);
+    }, 5000);
+  }, []);
+
+  // Auto-pop Minions / Actions Menu for 5 seconds
+  const triggerMenuPopup = React.useCallback(() => {
+    setShowMenuPopup(prev => {
+      const next = !prev;
+      if (menuTimerRef.current) clearTimeout(menuTimerRef.current);
+      if (next) {
+        menuTimerRef.current = setTimeout(() => {
+          setShowMenuPopup(false);
+          setActiveTab("none");
+        }, 5000);
+      }
+      return next;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (cash !== prevCashRef.current || totalGemsCount !== prevGemsRef.current) {
+      prevCashRef.current = cash;
+      prevGemsRef.current = totalGemsCount;
+      triggerMoneyPopup();
+    }
+  }, [cash, totalGemsCount, triggerMoneyPopup]);
+
   return (
     <div className="fixed inset-0 pointer-events-none z-40 flex flex-col justify-between p-3 md:p-6 font-sans">
-      {/* Top Bar Header */}
+      {/* Top Floating Control Bar (Minimal & Unobtrusive) */}
       <motion.div
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="pointer-events-auto flex items-center justify-between gap-3 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl px-4 py-2.5 text-white shadow-xl max-w-5xl mx-auto w-full"
+        className="pointer-events-auto flex items-center justify-between gap-2 max-w-5xl mx-auto w-full"
       >
-        {/* Brand & Location */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-400 to-emerald-400 flex items-center justify-center font-bold text-slate-950 text-base shadow-inner">
-            ⛏
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1">
-              <span>Deep Gem Mine & Jewelry Empire</span>
-              <span className="text-slate-600">·</span>
-              <span className="text-emerald-400 font-mono">{formattedRemainingGems}</span>
-            </div>
-            <div className="text-xs md:text-sm font-bold text-slate-100 flex items-center gap-2">
-              <span>{location}</span>
-              <span className="text-slate-500">·</span>
-              <span className="text-cyan-400 font-mono">{depthFeet} FT</span>
-            </div>
-          </div>
+        {/* Location Badge */}
+        <div className="bg-slate-900/85 backdrop-blur-md border border-slate-700/80 rounded-2xl px-3.5 py-1.5 text-white shadow-xl flex items-center gap-2 text-xs font-bold">
+          <span className="text-cyan-400">📍 {location}</span>
+          <span className="text-slate-500">·</span>
+          <span className="text-emerald-400 font-mono">{depthFeet} FT</span>
         </div>
 
-        {/* Stats Strip */}
-        {!clearScreenMode && (
-          <div className="flex items-center gap-4 md:gap-6 text-xs md:text-sm">
-            {/* Cash Balance */}
-            <div className="flex flex-col">
-              <span className="text-slate-400 text-[10px] uppercase font-medium">Cash</span>
-              <span className="font-bold font-mono text-emerald-400 text-sm md:text-base">
-                ${cash.toLocaleString()}
-              </span>
-            </div>
-
-            {/* Backpack Meter */}
-            <div className="flex flex-col">
-              <span className="text-slate-400 text-[10px] uppercase font-medium">Backpack</span>
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold font-mono text-amber-300">
-                  {totalGemsCount} / {backpackCapacity}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Action Buttons */}
+        {/* Minimal Floating Triggers */}
         <div className="flex items-center gap-2">
-          {!clearScreenMode && (
-            <>
-              <button
-                onClick={() => setActiveTab(activeTab === "gems" ? "none" : "gems")}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === "gems"
-                    ? "bg-amber-500 text-slate-950 shadow-md"
-                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700"
-                }`}
-              >
-                🎒 Gems (${inventoryValue})
-              </button>
+          {/* Money Interface Pop-up Trigger */}
+          <button
+            onClick={triggerMoneyPopup}
+            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-emerald-400 font-mono font-bold text-xs border border-emerald-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5"
+            title="Click to view Cash & Treasury (Auto-closes in 5s)"
+          >
+            <span>💵 ${cash.toLocaleString()}</span>
+          </button>
 
-              <button
-                onClick={() => setActiveTab(activeTab === "jewelry" ? "none" : "jewelry")}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === "jewelry"
-                    ? "bg-pink-500 text-slate-950 shadow-md"
-                    : "bg-slate-800 hover:bg-slate-700 text-pink-300 border border-slate-700"
-                }`}
-              >
-                💍 Jewelry (${jewelryValue})
-              </button>
-
-              <button
-                onClick={() => setActiveTab(activeTab === "upgrades" ? "none" : "upgrades")}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === "upgrades"
-                    ? "bg-emerald-500 text-slate-950 shadow-md"
-                    : "bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700"
-                }`}
-              >
-                ⚡ Upgrades
-              </button>
-
-              <button
-                onClick={onOpenOffice}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-sm border border-cyan-400/40"
-              >
-                🏢 Office
-              </button>
-
-              <button
-                onClick={onOpenEncyclopedia}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-slate-950 shadow-sm border border-amber-400/50"
-              >
-                📖 Encyclopedia
-              </button>
-
-              <button
-                onClick={onOpenStatistics}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-sm border border-emerald-400/50"
-              >
-                📊 Stats
-              </button>
-
-              <button
-                onClick={onOpenSettings}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-sm"
-              >
-                ⚙️ Settings
-              </button>
-
-              <button
-                onClick={() => setActiveTab(activeTab === "achievements" ? "none" : "achievements")}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === "achievements"
-                    ? "bg-yellow-400 text-slate-950 shadow-md"
-                    : "bg-slate-800 hover:bg-slate-700 text-yellow-300 border border-slate-700"
-                }`}
-              >
-                🏆 Achievements
-              </button>
-
-              <button
-                onClick={() => setActiveTab(activeTab === "audio" ? "none" : "audio")}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  activeTab === "audio"
-                    ? "bg-cyan-500 text-slate-950 shadow-md"
-                    : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700"
-                }`}
-              >
-                🔊 Audio & Music
-              </button>
-
-              <button
-                onClick={handleToggleMusic}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm ${
-                  musicActive
-                    ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
-                    : "bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700"
-                }`}
-                title={musicActive ? "Music Playing - Click to Pause" : "Play Country / Cave Music"}
-              >
-                <span>{musicActive ? "🎵 Music: ON" : "🔈 Music: OFF"}</span>
-              </button>
-
-              {/* 400-Meter Headlamp LED Controls */}
-              <button
-                onClick={onToggleHeadlamp}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                  headlampOn
-                    ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300"
-                    : "bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700"
-                }`}
-                title="Toggle 400m LED Helmet Headlamp (Key: F)"
-              >
-                🔦 {headlampOn ? "Lamp: ON" : "Lamp: OFF"}
-              </button>
-
-              {headlampOn && (
-                <button
-                  onClick={onCycleHeadlampPower}
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 shadow-sm"
-                  title="Cycle 400m Headlamp Beam Intensity (100% / 150% / 200% / 250%)"
-                >
-                  💡 Beam: {Math.round(headlampPower * 100)}%
-                </button>
-              )}
-
-              {/* 3rd-Person Camera Quick Orbit & Zoom Controls */}
-              <div className="flex items-center gap-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-1.5 py-1 shadow-sm">
-                <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider pl-1 mr-0.5 hidden sm:inline">Cam</span>
-                <button
-                  onClick={onRotateCameraLeft}
-                  className="w-7 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
-                  title="Rotate Camera Left (Q)"
-                >
-                  ↺
-                </button>
-                <button
-                  onClick={onResetCamera}
-                  className="px-1.5 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center text-[11px] font-mono font-bold transition-all active:scale-95 border border-slate-700"
-                  title="Reset Camera Behind Player"
-                >
-                  ⟲ Reset
-                </button>
-                <button
-                  onClick={onRotateCameraRight}
-                  className="w-7 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
-                  title="Rotate Camera Right (E)"
-                >
-                  ↻
-                </button>
-                <button
-                  onClick={onZoomCameraIn}
-                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
-                  title="Zoom In (Scroll Up)"
-                >
-                  +
-                </button>
-                <button
-                  onClick={onZoomCameraOut}
-                  className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 flex items-center justify-center text-xs font-bold transition-all active:scale-95 border border-slate-700"
-                  title="Zoom Out (Scroll Down)"
-                >
-                  -
-                </button>
-              </div>
-            </>
-          )}
+          {/* Minions & Empire Pop-Up Menu Trigger */}
+          <button
+            onClick={triggerMenuPopup}
+            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-cyan-300 font-bold text-xs border border-cyan-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5"
+            title="Click to open Minions & Empire Pop-Up Menu (Auto-closes in 5s)"
+          >
+            <span>☰ Minions & Menu</span>
+          </button>
 
           {/* Clear Screen Toggle */}
           <button
             onClick={onToggleClearScreen}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-md ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-lg backdrop-blur-md ${
               clearScreenMode
                 ? "bg-cyan-500 text-slate-950 animate-pulse"
-                : "bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/50"
+                : "bg-slate-900/90 hover:bg-slate-800 text-slate-300 border border-slate-700"
             }`}
           >
             {clearScreenMode ? "👁 Clear Screen On" : "👁 Clear Screen"}
           </button>
         </div>
       </motion.div>
+
+      {/* Auto-Disappearing 5-Second Money Interface Pop-Up */}
+      <AnimatePresence>
+        {showMoneyPopup && !clearScreenMode && (
+          <motion.div
+            initial={{ y: -30, opacity: 0, scale: 0.9 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: -30, opacity: 0, scale: 0.9 }}
+            className="pointer-events-auto self-center bg-slate-900/95 border-2 border-emerald-500/80 rounded-2xl px-6 py-3.5 shadow-2xl backdrop-blur-md text-center max-w-sm w-full font-mono mt-2 flex flex-col items-center gap-1 z-50"
+          >
+            <div className="text-[10px] uppercase font-sans tracking-widest text-emerald-400 font-extrabold flex items-center gap-2">
+              <span>💵 CASH & TREASURY BALANCE</span>
+              <span className="text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded-full font-sans font-normal border border-slate-700">
+                Disappears in 5s
+              </span>
+            </div>
+            <div className="text-2xl font-black text-emerald-300 tracking-tight">
+              ${cash.toLocaleString()}
+            </div>
+            <div className="flex items-center gap-4 text-xs font-sans text-slate-300 mt-1">
+              <span>🎒 Backpack: <strong className="text-amber-300 font-mono">{totalGemsCount} / {backpackCapacity}</strong></span>
+              <span>💎 Gems Value: <strong className="text-emerald-400 font-mono">${inventoryValue}</strong></span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Auto-Disappearing 5-Second Minions & Empire Pop-Up Menu */}
+      <AnimatePresence>
+        {showMenuPopup && !clearScreenMode && (
+          <motion.div
+            initial={{ y: -20, opacity: 0, scale: 0.95 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: -20, opacity: 0, scale: 0.95 }}
+            className="pointer-events-auto self-center bg-slate-900/95 border-2 border-cyan-500/70 rounded-2xl p-4 shadow-2xl backdrop-blur-md max-w-2xl w-full mt-2 z-50"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                <span>👑 MINIONS & EMPIRE POP-UP MENU</span>
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
+                Auto-closes in 5s
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-bold">
+              <button
+                onClick={() => { onOpenOffice(); setShowMenuPopup(false); }}
+                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-md transition-all active:scale-95 border border-cyan-400/40"
+              >
+                🏢 Office & Minions
+              </button>
+              <button
+                onClick={() => { setActiveTab("upgrades"); triggerMenuPopup(); }}
+                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md transition-all active:scale-95 border border-emerald-400/40"
+              >
+                ⚡ Drill Upgrades
+              </button>
+              <button
+                onClick={() => { onOpenEncyclopedia(); setShowMenuPopup(false); }}
+                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-slate-950 shadow-md transition-all active:scale-95 border border-amber-400/40"
+              >
+                📖 Encyclopedia
+              </button>
+              <button
+                onClick={() => { onOpenStatistics(); setShowMenuPopup(false); }}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 shadow-md transition-all active:scale-95 border border-slate-700"
+              >
+                📊 Empire Stats
+              </button>
+              <button
+                onClick={() => { setActiveTab("gems"); triggerMenuPopup(); }}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 shadow-md transition-all active:scale-95 border border-slate-700"
+              >
+                🎒 Gems (${inventoryValue})
+              </button>
+              <button
+                onClick={() => { setActiveTab("jewelry"); triggerMenuPopup(); }}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-pink-300 shadow-md transition-all active:scale-95 border border-slate-700"
+              >
+                💍 Jewelry (${jewelryValue})
+              </button>
+              <button
+                onClick={() => { onOpenSettings(); setShowMenuPopup(false); }}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 shadow-md transition-all active:scale-95 border border-slate-700"
+              >
+                ⚙️ Settings
+              </button>
+              <button
+                onClick={() => { setActiveTab("audio"); triggerMenuPopup(); }}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 shadow-md transition-all active:scale-95 border border-slate-700"
+              >
+                🔊 Audio & Music
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+
 
       {/* Floating Indicators */}
       <AnimatePresence>
@@ -483,13 +446,29 @@ export default function MiningHUD({
 
       {/* Interactive Context Banners */}
       <AnimatePresence>
-        {(nearElevator || nearTrader || nearJewelryShop || nearFactory || nearOffice) && !clearScreenMode && (
+        {(nearElevator || nearTrader || nearJewelryShop || nearFactory || nearOffice || nearFlume) && !clearScreenMode && (
           <motion.div
             initial={{ scale: 0.9, opacity: 0, y: 10 }}
             animate={{ scale: 1, opacity: 1, y: 0 }}
             exit={{ scale: 0.9, opacity: 0, y: 10 }}
             className="pointer-events-auto self-center bg-slate-900/95 border border-cyan-500/50 rounded-2xl p-4 shadow-2xl backdrop-blur-md max-w-md w-full text-center my-auto"
           >
+            {nearFlume && (
+              <div>
+                <div className="text-cyan-400 font-extrabold text-base tracking-wide uppercase flex items-center justify-center gap-2">
+                  <span>🪵 CAVERN LOG FLUME WATER RIDE</span>
+                </div>
+                <div className="text-slate-300 text-xs mt-1">
+                  Ride through subterranean waterfalls, scenic crystal bends, and experience the steep 60° splash drop!
+                </div>
+                <button
+                  onClick={onBoardFlume}
+                  className="mt-3 w-full py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-sm rounded-xl shadow-lg transition-all active:scale-95"
+                >
+                  BOARD LOG FLUME RIDE
+                </button>
+              </div>
+            )}
             {nearOffice && (
               <div>
                 <div className="text-cyan-400 font-extrabold text-base tracking-wide uppercase flex items-center justify-center gap-2">

@@ -5,52 +5,63 @@ export type AudioZone = "cave" | "surface" | "factory" | "jewelry";
 class SoundManager {
   private ctx: AudioContext | null = null;
 
-  // Multi-layered Industrial Drill Engine
+  // Supplied Asset Buffers
+  private caveWindBuffer: AudioBuffer | null = null;
+  private waterDripBuffer: AudioBuffer | null = null;
+  private countryMusicBuffer: AudioBuffer | null = null;
+  
+  // Running sound nodes
+  private caveWindSource: AudioBufferSourceNode | null = null;
+  private waterDripSource: AudioBufferSourceNode | null = null;
+  private countryMusicSource: AudioBufferSourceNode | null = null;
+  
+  // Music Engine
+  private musicActive: boolean = false;
+  private currentMusicZone: AudioZone = "cave";
+  private musicMasterGain: GainNode | null = null;
+  private caveGain: GainNode | null = null;
+  private surfaceGain: GainNode | null = null;
+  private factoryGain: GainNode | null = null;
+  private jewelryGain: GainNode | null = null;
+  private caveFilter: BiquadFilterNode | null = null;
+  private caveDroneOscs: OscillatorNode[] = [];
+  private caveLfo: OscillatorNode | null = null;
+  private musicTimerId: NodeJS.Timeout | null = null;
+  private stepCounter: number = 0;
+  
+  // Machinery
+  private isDrilling: boolean = false;
   private subEngineOsc: OscillatorNode | null = null;
   private subEngineGain: GainNode | null = null;
   private metalBitOsc: OscillatorNode | null = null;
   private metalBitGain: GainNode | null = null;
-  private isDrilling = false;
-
-  // Elevator Sound
-  private elevatorOsc: OscillatorNode | null = null;
-  private elevatorGain: GainNode | null = null;
-
-  // Factory Synchronized Audio Nodes
   private conveyorOsc: OscillatorNode | null = null;
   private conveyorGain: GainNode | null = null;
   private polisherOsc: OscillatorNode | null = null;
   private polisherGain: GainNode | null = null;
   private furnaceOsc: OscillatorNode | null = null;
   private furnaceGain: GainNode | null = null;
-
-  // --- MULTI-ZONE SOUNDTRACK ENGINE ---
-  private musicActive = false;
-  private currentMusicZone: AudioZone = "cave";
-  private musicMasterGain: GainNode | null = null;
+  private elevatorOsc: OscillatorNode | null = null;
+  private elevatorGain: GainNode | null = null;
   
-  // Zone Gains
-  private caveGain: GainNode | null = null;
-  private surfaceGain: GainNode | null = null;
-  private factoryGain: GainNode | null = null;
-  private jewelryGain: GainNode | null = null;
-
-  // Cave Drone Nodes
-  private caveDroneOscs: OscillatorNode[] = [];
-  private caveFilter: BiquadFilterNode | null = null;
-  private caveLfo: OscillatorNode | null = null;
-
-  // Music Scheduler Timer
-  private musicTimerId: NodeJS.Timeout | null = null;
-  private stepCounter = 0;
-
-  // Adjustable Volume Controls
   public volumes = {
     machinery: 0.75,
     ambience: 0.5,
     effects: 0.85,
     music: 0.65
   };
+
+  private async loadAsset(path: string): Promise<AudioBuffer | null> {
+    if (!this.ctx) return null;
+    try {
+      const response = await fetch(path);
+      const arrayBuffer = await response.arrayBuffer();
+      return await this.ctx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+      console.error(`Failed to load audio asset: ${path}`, e);
+      return null;
+    }
+  }
 
   setVolume(category: "machinery" | "ambience" | "effects" | "music", value: number) {
     this.volumes[category] = Math.max(0, Math.min(1, value));
@@ -59,22 +70,34 @@ class SoundManager {
     }
   }
 
-  public ensureAudioContext() {
-    this.init();
+  public async ensureAudioContext() {
+    await this.init();
   }
 
-  private init() {
-    if (!this.ctx && typeof window !== "undefined") {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
+  private initPromise: Promise<void> | null = null;
+  private async init() {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      if (!this.ctx && typeof window !== "undefined") {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          this.ctx = new AudioCtx();
+          
+          // Load assets
+          [this.countryMusicBuffer, this.waterDripBuffer, this.caveWindBuffer] = await Promise.all([
+            this.loadAsset("/assets/aistudio/mixkit-bigger-than-texas-1053_73a4e2f4.mp3"),
+            this.loadAsset("/assets/aistudio/AMBUndr_Cave_1__ID_2135__BigSoundBank.com_4420e7f0.wav"),
+            this.loadAsset("/assets/aistudio/freesound_community-cave-wind-10-76283_518b07d3.mp3")
+          ]);
+        }
       }
-    }
-    if (this.ctx && this.ctx.state === "suspended") {
-      this.ctx.resume();
-    }
+      if (this.ctx && this.ctx.state === "suspended") {
+        await this.ctx.resume();
+      }
+    })();
+    return this.initPromise;
   }
 
   // -------------------------------------------------------------------------
@@ -88,8 +111,8 @@ class SoundManager {
     return this.currentMusicZone;
   }
 
-  startMusic(zone: AudioZone = "cave") {
-    this.init();
+  public async startMusic(zone: AudioZone = "cave") {
+    await this.init();
     if (!this.ctx) return;
 
     if (this.musicActive) {
@@ -371,9 +394,63 @@ class SoundManager {
     return this.musicActive;
   }
 
-  // -------------------------------------------------------------------------
-  // 2. INDUSTRIAL SOUND EFFECTS & DRILL ENGINE
-  // -------------------------------------------------------------------------
+  public async playAmbientSound(type: "caveWind" | "waterDrip", active: boolean) {
+    await this.init();
+    if (!this.ctx) return;
+    const vol = this.volumes.ambience;
+
+    if (type === "caveWind") {
+      if (active && !this.caveWindSource && this.caveWindBuffer) {
+        this.caveWindSource = this.ctx.createBufferSource();
+        this.caveWindSource.buffer = this.caveWindBuffer;
+        this.caveWindSource.loop = true;
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+        this.caveWindSource.connect(gain);
+        gain.connect(this.ctx.destination);
+        this.caveWindSource.start();
+      } else if (!active && this.caveWindSource) {
+        this.caveWindSource.stop();
+        this.caveWindSource = null;
+      }
+    } else if (type === "waterDrip") {
+      if (active && !this.waterDripSource && this.waterDripBuffer) {
+        this.waterDripSource = this.ctx.createBufferSource();
+        this.waterDripSource.buffer = this.waterDripBuffer;
+        this.waterDripSource.loop = true;
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+        this.waterDripSource.connect(gain);
+        gain.connect(this.ctx.destination);
+        this.waterDripSource.start();
+      } else if (!active && this.waterDripSource) {
+        this.waterDripSource.stop();
+        this.waterDripSource = null;
+      }
+    }
+  }
+
+  public async playMusic(type: "country", active: boolean) {
+    await this.init();
+    if (!this.ctx) return;
+    const vol = this.volumes.music;
+
+    if (type === "country") {
+      if (active && !this.countryMusicSource && this.countryMusicBuffer) {
+        this.countryMusicSource = this.ctx.createBufferSource();
+        this.countryMusicSource.buffer = this.countryMusicBuffer;
+        this.countryMusicSource.loop = true;
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+        this.countryMusicSource.connect(gain);
+        gain.connect(this.ctx.destination);
+        this.countryMusicSource.start();
+      } else if (!active && this.countryMusicSource) {
+        this.countryMusicSource.stop();
+        this.countryMusicSource = null;
+      }
+    }
+  }
   playDrillSound(active: boolean, speedMultiplier = 1) {
     this.init();
     if (!this.ctx) return;
@@ -755,6 +832,56 @@ class SoundManager {
           this.elevatorGain = null;
         }, 320);
       }
+    }
+  }
+
+  playWaterDrip() {
+    this.init();
+    if (!this.ctx) return;
+    try {
+      const now = this.ctx.currentTime;
+      const vol = this.volumes.effects;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(600 + Math.random() * 400, now);
+      osc.frequency.exponentialRampToValueAtTime(1400 + Math.random() * 600, now + 0.08);
+
+      gain.gain.setValueAtTime(0.2 * vol, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.18);
+    } catch (e) {
+      console.warn("Water drip audio error:", e);
+    }
+  }
+
+  playWaterSplash() {
+    this.init();
+    if (!this.ctx) return;
+    try {
+      const now = this.ctx.currentTime;
+      const vol = this.volumes.effects;
+      for (let i = 0; i < 3; i++) {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = i === 0 ? "triangle" : "sine";
+        osc.frequency.setValueAtTime(120 + Math.random() * 200, now + i * 0.03);
+        osc.frequency.exponentialRampToValueAtTime(80 + Math.random() * 60, now + i * 0.03 + 0.25);
+
+        gain.gain.setValueAtTime(0.3 * vol, now + i * 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.03 + 0.25);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now + i * 0.03);
+        osc.stop(now + i * 0.03 + 0.25);
+      }
+    } catch (e) {
+      console.warn("Water splash audio error:", e);
     }
   }
 
