@@ -5,21 +5,24 @@ import * as THREE from "three";
 export type AudioZone = "cave" | "surface" | "factory" | "jewelry";
 
 class SoundManager {
-  private ctx: AudioContext | null = null;
+  public ctx: AudioContext | null = null;
 
-  // Supplied Asset Buffers
-  private caveWindBuffer: AudioBuffer | null = null;
-  private waterDripBuffer: AudioBuffer | null = null;
-  private countryMusicBuffer: AudioBuffer | null = null;
+  // Supplied Asset Buffers (Accessible for diagnostics)
+  public caveWindBuffer: AudioBuffer | null = null;
+  public waterDripBuffer: AudioBuffer | null = null;
+  public countryMusicBuffer: AudioBuffer | null = null;
   
   // Running sound nodes
   private caveWindSource: AudioBufferSourceNode | null = null;
   private waterDripSource: AudioBufferSourceNode | null = null;
   private countryMusicSource: AudioBufferSourceNode | null = null;
+
+  // HTML5 Media Element for rock-solid background audio playback in other browsers/tabs
+  private countryAudioEl: HTMLAudioElement | null = null;
   
   // Music Engine
   private musicActive: boolean = false;
-  private currentMusicZone: AudioZone = "cave";
+  private currentMusicZone: AudioZone = "surface";
   private musicMasterGain: GainNode | null = null;
   private caveGain: GainNode | null = null;
   private surfaceGain: GainNode | null = null;
@@ -28,8 +31,15 @@ class SoundManager {
   private caveFilter: BiquadFilterNode | null = null;
   private caveDroneOscs: OscillatorNode[] = [];
   private caveLfo: OscillatorNode | null = null;
-  private musicTimerId: NodeJS.Timeout | null = null;
+
+  // High-Precision Web Audio Lookahead Scheduler & Background Worker Ticker
+  private lookaheadTimerId: NodeJS.Timeout | null = null;
+  private workerTicker: { start: () => void; stop: () => void } | null = null;
+  private nextStepTime: number = 0;
   private stepCounter: number = 0;
+  private readonly stepDuration: number = 0.16; // 94 BPM 16th-note (160ms)
+  private readonly lookaheadTime: number = 4.0; // Queue 4.0 seconds into the future
+  private listenersAttached: boolean = false;
   
   // Machinery
   private isDrilling: boolean = false;
@@ -68,13 +78,155 @@ class SoundManager {
 
   setVolume(category: "machinery" | "ambience" | "effects" | "music", value: number) {
     this.volumes[category] = Math.max(0, Math.min(1, value));
-    if (category === "music" && this.musicMasterGain && this.ctx) {
-      this.musicMasterGain.gain.setValueAtTime(this.volumes.music * 0.5, this.ctx.currentTime);
+    if (category === "music") {
+      if (this.musicMasterGain && this.ctx) {
+        this.musicMasterGain.gain.setValueAtTime(this.volumes.music * 0.5, this.ctx.currentTime);
+      }
+      if (this.countryAudioEl) {
+        this.countryAudioEl.volume = this.currentMusicZone === "surface" ? this.volumes.music * 0.65 : 0;
+      }
     }
   }
 
   public async ensureAudioContext() {
     await this.init();
+    await this.resumeAudioContextIfNeeded();
+  }
+
+  /**
+   * Resumes the AudioContext and unpauses active background audio.
+   * Safe to call repeatedly from any user interaction or visibility/focus handler.
+   */
+  public async resumeAudioContextIfNeeded() {
+    if (!this.ctx && typeof window !== "undefined") {
+      await this.init();
+    }
+    if (this.ctx && this.ctx.state === "suspended") {
+      try {
+        await this.ctx.resume();
+      } catch {
+        // Ignored if browser policy requires active gesture
+      }
+    }
+    if (this.countryAudioEl && this.musicActive && this.currentMusicZone === "surface") {
+      if (this.countryAudioEl.paused) {
+        this.countryAudioEl.play().catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Global listeners that keep the music playing across other browser tabs/windows
+   * and immediately recover full playback when returning to the game.
+   */
+  private attachResilienceListeners() {
+    if (typeof window === "undefined" || this.listenersAttached) return;
+    this.listenersAttached = true;
+
+    // 1. AudioContext state monitoring
+    if (this.ctx) {
+      this.ctx.onstatechange = () => {
+        if (this.ctx && this.ctx.state === "suspended" && this.musicActive) {
+          this.ctx.resume().catch(() => {});
+        }
+      };
+    }
+
+    // 2. Tab Visibility & Window Focus Handlers (Crucial for background play & instant return)
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        // User came back into the game from another window or tab!
+        this.resumeAndCatchUp();
+      } else {
+        // User switched to another browser window or tab!
+        // DO NOT CUT OUT: Ensure audio continues by scheduling 5.0 seconds ahead
+        this.ensurePlayingInBackground();
+      }
+    });
+
+    window.addEventListener("focus", () => {
+      this.resumeAndCatchUp();
+    });
+
+    window.addEventListener("blur", () => {
+      this.ensurePlayingInBackground();
+    });
+
+    window.addEventListener("pageshow", () => {
+      this.resumeAndCatchUp();
+    });
+
+    // 3. Global user interaction unblocker (fulfills browser autoplay requirements)
+    const gestureWakeup = () => {
+      this.resumeAudioContextIfNeeded();
+    };
+    window.addEventListener("pointerdown", gestureWakeup, { passive: true });
+    window.addEventListener("keydown", gestureWakeup, { passive: true });
+    window.addEventListener("touchstart", gestureWakeup, { passive: true });
+  }
+
+  private resumeAndCatchUp() {
+    this.resumeAudioContextIfNeeded();
+    if (this.ctx && this.musicActive) {
+      // If the audio clock advanced while tab was away, synchronize step time to now
+      if (this.nextStepTime < this.ctx.currentTime) {
+        this.nextStepTime = this.ctx.currentTime + 0.05;
+      }
+      this.tickScheduler();
+    }
+  }
+
+  private ensurePlayingInBackground() {
+    this.resumeAudioContextIfNeeded();
+    if (this.ctx && this.musicActive) {
+      // Pre-schedule 5.0 seconds into the future directly on hardware audio timeline
+      const scheduleUntil = this.ctx.currentTime + 5.0;
+      while (this.nextStepTime < scheduleUntil) {
+        this.scheduleStep(this.nextStepTime, this.stepCounter);
+        this.nextStepTime += this.stepDuration;
+        this.stepCounter++;
+      }
+    }
+  }
+
+  /**
+   * Initializes an unthrottled Web Worker ticker so the music scheduler
+   * never gets choked by background tab timer throttling.
+   */
+  private initWorkerTicker(): { start: () => void; stop: () => void } {
+    if (typeof window === "undefined" || typeof Worker === "undefined") {
+      return { start: () => {}, stop: () => {} };
+    }
+    try {
+      const blob = new Blob([
+        `let timer = null;
+         self.onmessage = function(e) {
+           if (e.data === 'start') {
+             if (!timer) {
+               timer = setInterval(function() {
+                 self.postMessage('tick');
+               }, 80);
+             }
+           } else if (e.data === 'stop') {
+             if (timer) {
+               clearInterval(timer);
+               timer = null;
+             }
+           }
+         };`
+      ], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const worker = new Worker(blobUrl);
+      worker.onmessage = () => {
+        this.tickScheduler();
+      };
+      return {
+        start: () => worker.postMessage('start'),
+        stop: () => worker.postMessage('stop')
+      };
+    } catch {
+      return { start: () => {}, stop: () => {} };
+    }
   }
 
   private initPromise: Promise<void> | null = null;
@@ -87,8 +239,20 @@ class SoundManager {
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         if (AudioCtx) {
           this.ctx = new AudioCtx();
-          
-          // Load assets
+          this.attachResilienceListeners();
+
+          // Initialize background media element for native browser background audio priority
+          try {
+            const audio = new Audio("/assets/aistudio/mixkit-bigger-than-texas-1053_73a4e2f4.mp3");
+            audio.loop = true;
+            audio.preload = "auto";
+            audio.volume = this.currentMusicZone === "surface" ? this.volumes.music * 0.65 : 0;
+            this.countryAudioEl = audio;
+          } catch {
+            // Fallback to Web Audio buffer / procedural synthesis
+          }
+
+          // Load audio asset buffers
           [this.countryMusicBuffer, this.waterDripBuffer, this.caveWindBuffer] = await Promise.all([
             this.loadAsset("/assets/aistudio/mixkit-bigger-than-texas-1053_73a4e2f4.mp3"),
             this.loadAsset("/assets/aistudio/AMBUndr_Cave_1__ID_2135__BigSoundBank.com_4420e7f0.wav"),
@@ -97,14 +261,14 @@ class SoundManager {
         }
       }
       if (this.ctx && this.ctx.state === "suspended") {
-        await this.ctx.resume();
+        await this.ctx.resume().catch(() => {});
       }
     })();
     return this.initPromise;
   }
 
   // -------------------------------------------------------------------------
-  // 1. SOUNDTRACK ENGINE (CAVE, SURFACE, FACTORY, JEWELRY)
+  // 1. INDESTRUCTIBLE MULTI-ZONE SOUNDTRACK ENGINE
   // -------------------------------------------------------------------------
   isMusicActive(): boolean {
     return this.musicActive;
@@ -114,12 +278,13 @@ class SoundManager {
     return this.currentMusicZone;
   }
 
-  public async startMusic(zone: AudioZone = "cave") {
+  public async startMusic(zone: AudioZone = "surface") {
     await this.init();
     if (!this.ctx) return;
 
     if (this.musicActive) {
       this.setMusicZone(zone);
+      await this.resumeAudioContextIfNeeded();
       return;
     }
 
@@ -134,7 +299,7 @@ class SoundManager {
       master.connect(this.ctx.destination);
       this.musicMasterGain = master;
 
-      // Create 4 dedicated Zone Gains
+      // 4 Dedicated Zone Gains
       const mkZoneGain = (initActive: boolean) => {
         const g = this.ctx!.createGain();
         g.gain.setValueAtTime(initActive ? 1.0 : 0.0, now);
@@ -147,7 +312,7 @@ class SoundManager {
       this.factoryGain = mkZoneGain(zone === "factory");
       this.jewelryGain = mkZoneGain(zone === "jewelry");
 
-      // --- CAVE AUDIO SETUP (Rich, audible, resonant cavern drone & crystal bells) ---
+      // --- CAVE AUDIO SETUP (Continuous resonant cavern chord & lowpass LFO) ---
       const cFilt = this.ctx.createBiquadFilter();
       cFilt.type = "lowpass";
       cFilt.frequency.setValueAtTime(450, now);
@@ -155,7 +320,6 @@ class SoundManager {
       cFilt.connect(this.caveGain);
       this.caveFilter = cFilt;
 
-      // Audible, rich harmonic cavern chord: C2 (65.4Hz), G2 (98.0Hz), C3 (130.8Hz), Eb3 (155.6Hz)
       const cavePitches = [65.41, 98.0, 130.81, 155.56];
       this.caveDroneOscs = [];
       cavePitches.forEach((pitch, i) => {
@@ -170,7 +334,6 @@ class SoundManager {
         this.caveDroneOscs.push(osc);
       });
 
-      // Slow Breathing Cavern LFO
       const lfo = this.ctx.createOscillator();
       const lfoGain = this.ctx.createGain();
       lfo.frequency.setValueAtTime(0.08, now);
@@ -179,166 +342,218 @@ class SoundManager {
       lfo.start(now);
       this.caveLfo = lfo;
 
-      // --- PROCEDURAL NOTE SCHEDULER ---
-      const countryPatterns = [
-        { bass: 73.42, notes: [146.83, 185.0, 220.0, 293.66, 369.99, 440.0] }, // D Major High
-        { bass: 98.0, notes: [196.0, 246.94, 293.66, 392.0, 493.88, 587.33] }, // G Major
-        { bass: 110.0, notes: [220.0, 277.18, 329.63, 440.0, 554.37, 659.25] }, // A Major
-        { bass: 73.42, notes: [146.83, 220.0, 293.66, 185.0, 440.0, 369.99] }  // D Folk Variation
-      ];
+      // Start HTML5 country music loop if surface
+      if (this.countryAudioEl) {
+        this.countryAudioEl.volume = zone === "surface" ? this.volumes.music * 0.65 : 0;
+        this.countryAudioEl.play().catch(() => {});
+      }
 
-      const caveCrystalPitches = [164.81, 196.0, 220.0, 246.94, 329.63, 392.0, 493.88]; // Deeper, more somber
-      const jewelryChimes = [554.37, 659.25, 739.99, 880.0, 987.77, 1108.73];
-
+      // Initialize Lookahead Timeline
+      this.nextStepTime = this.ctx.currentTime + 0.05;
       this.stepCounter = 0;
-      this.musicTimerId = setInterval(() => {
-        if (!this.ctx || !this.musicActive) return;
-        const curTime = this.ctx.currentTime;
-        const activeZone = this.currentMusicZone;
 
-        // A. SURFACE: Country Instrumental (Guitar/Banjo vibe)
-        if (activeZone === "surface" && this.surfaceGain) {
-          const patternIdx = Math.floor(this.stepCounter / 8) % countryPatterns.length;
-          const subStep = this.stepCounter % 8;
-          const pattern = countryPatterns[patternIdx];
+      // Start Dual-Engine Ticker:
+      // A. Inline Web Worker ticker (runs continuously in background tabs without throttling)
+      if (!this.workerTicker) {
+        this.workerTicker = this.initWorkerTicker();
+      }
+      this.workerTicker.start();
 
-          // Alternating Bass (1 and 5)
-          if (subStep === 0 || subStep === 4) {
-            const bOsc = this.ctx.createOscillator();
-            const bGain = this.ctx.createGain();
-            bOsc.type = "triangle";
-            bOsc.frequency.setValueAtTime(subStep === 0 ? pattern.bass : pattern.bass * 1.5, curTime);
-            bGain.gain.setValueAtTime(0.3, curTime);
-            bGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.4);
-            bOsc.connect(bGain);
-            bGain.connect(this.surfaceGain);
-            bOsc.start(curTime);
-            bOsc.stop(curTime + 0.4);
-          }
+      // B. Main thread interval ticker (fallback)
+      if (this.lookaheadTimerId) clearInterval(this.lookaheadTimerId);
+      this.lookaheadTimerId = setInterval(() => {
+        this.tickScheduler();
+      }, 80);
 
-          // Plucked acoustic string (Banjo/Guitar style)
-          const noteFreq = pattern.notes[subStep % pattern.notes.length];
-          if (subStep % 2 === 0 || Math.random() < 0.4) {
-            const gOsc = this.ctx.createOscillator();
-            const gGain = this.ctx.createGain();
-            const gFilter = this.ctx.createBiquadFilter();
-            gOsc.type = "sawtooth";
-            
-            // Subtle pitch slide for country feel
-            if (subStep === 2 || subStep === 6) {
-                gOsc.frequency.setValueAtTime(noteFreq * 0.95, curTime);
-                gOsc.frequency.exponentialRampToValueAtTime(noteFreq, curTime + 0.05);
-            } else {
-                gOsc.frequency.setValueAtTime(noteFreq, curTime);
-            }
-
-            gFilter.type = "lowpass";
-            gFilter.frequency.setValueAtTime(3200, curTime);
-            gFilter.frequency.exponentialRampToValueAtTime(800, curTime + 0.2);
-            
-            gGain.gain.setValueAtTime(0.22, curTime);
-            gGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.25);
-            
-            gOsc.connect(gFilter);
-            gFilter.connect(gGain);
-            gGain.connect(this.surfaceGain);
-            gOsc.start(curTime);
-            gOsc.stop(curTime + 0.25);
-          }
-        }
-
-        // B. CAVE: Dark Atmospheric Cavern (Deep Drones & Crystal Echoes)
-        else if (activeZone === "cave" && this.caveGain) {
-          // Low frequency "water drop" pulse
-          if (this.stepCounter % 16 === 0) {
-              const dOsc = this.ctx.createOscillator();
-              const dGain = this.ctx.createGain();
-              dOsc.frequency.setValueAtTime(45, curTime);
-              dOsc.frequency.exponentialRampToValueAtTime(20, curTime + 0.8);
-              dGain.gain.setValueAtTime(0.4, curTime);
-              dGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 0.8);
-              dOsc.connect(dGain);
-              dGain.connect(this.caveGain);
-              dOsc.start(curTime);
-              dOsc.stop(curTime + 0.8);
-          }
-
-          if (this.stepCounter % 4 === 0 && Math.random() < 0.5) {
-            const cFreq = caveCrystalPitches[Math.floor(Math.random() * caveCrystalPitches.length)];
-            const cOsc = this.ctx.createOscillator();
-            const cGain = this.ctx.createGain();
-            const cVerb = this.ctx.createGain(); // Simplified reverb placeholder
-            
-            cOsc.type = "sine";
-            cOsc.frequency.setValueAtTime(cFreq, curTime);
-            cGain.gain.setValueAtTime(0.12, curTime);
-            cGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 2.5);
-            
-            cOsc.connect(cGain);
-            cGain.connect(this.caveGain);
-            cOsc.start(curTime);
-            cOsc.stop(curTime + 2.5);
-          }
-        }
-
-        // C. FACTORY: Rhythmic Industrial Pulse & Hydraulic Steam
-        else if (activeZone === "factory" && this.factoryGain) {
-          const subStep = this.stepCounter % 8;
-          // Hydraulic kick on 0 and 4
-          if (subStep === 0 || subStep === 4) {
-            const kickOsc = this.ctx.createOscillator();
-            const kickGain = this.ctx.createGain();
-            kickOsc.frequency.setValueAtTime(130, curTime);
-            kickOsc.frequency.exponentialRampToValueAtTime(42, curTime + 0.12);
-            kickGain.gain.setValueAtTime(0.3, curTime);
-            kickGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.15);
-            kickOsc.connect(kickGain);
-            kickGain.connect(this.factoryGain);
-            kickOsc.start(curTime);
-            kickOsc.stop(curTime + 0.15);
-          }
-          // Metallic tick on every 2nd step
-          if (subStep % 2 === 1) {
-            const tickOsc = this.ctx.createOscillator();
-            const tickGain = this.ctx.createGain();
-            tickOsc.type = "square";
-            tickOsc.frequency.setValueAtTime(1200 + (subStep * 100), curTime);
-            tickGain.gain.setValueAtTime(0.04, curTime);
-            tickGain.gain.exponentialRampToValueAtTime(0.001, curTime + 0.05);
-            tickOsc.connect(tickGain);
-            tickGain.connect(this.factoryGain);
-            tickOsc.start(curTime);
-            tickOsc.stop(curTime + 0.05);
-          }
-        }
-
-        // D. JEWELRY: Sparkling Luxury Boutique Celesta / Bells
-        else if (activeZone === "jewelry" && this.jewelryGain) {
-          if (this.stepCounter % 2 === 0 && Math.random() < 0.7) {
-            const jFreq = jewelryChimes[Math.floor(Math.random() * jewelryChimes.length)];
-            const jOsc = this.ctx.createOscillator();
-            const jGain = this.ctx.createGain();
-            jOsc.type = "sine";
-            jOsc.frequency.setValueAtTime(jFreq, curTime);
-            jGain.gain.setValueAtTime(0.14, curTime);
-            jGain.gain.exponentialRampToValueAtTime(0.0001, curTime + 0.8);
-            jOsc.connect(jGain);
-            jGain.connect(this.jewelryGain);
-            jOsc.start(curTime);
-            jOsc.stop(curTime + 0.8);
-          }
-        }
-
-        this.stepCounter++;
-      }, 160); // 94 BPM
+      // Pre-schedule immediate lookahead buffer
+      this.tickScheduler();
     } catch (e) {
-      console.warn("Background music engine error:", e);
+      console.warn("Background music engine start warning:", e);
+    }
+  }
+
+  /**
+   * High-precision lookahead scheduler.
+   * Keeps 4.0 seconds of audio events queued ahead in the browser's native audio DSP thread,
+   * guaranteeing that audio NEVER cuts out even if window timers are throttled in other browsers.
+   */
+  private tickScheduler() {
+    if (!this.ctx || !this.musicActive) return;
+
+    if (this.ctx.state === "suspended") {
+      this.ctx.resume().catch(() => {});
+    }
+
+    const scheduleUntil = this.ctx.currentTime + this.lookaheadTime;
+    if (this.nextStepTime < this.ctx.currentTime) {
+      this.nextStepTime = this.ctx.currentTime + 0.02;
+    }
+
+    while (this.nextStepTime < scheduleUntil) {
+      this.scheduleStep(this.nextStepTime, this.stepCounter);
+      this.nextStepTime += this.stepDuration;
+      this.stepCounter++;
+    }
+  }
+
+  /**
+   * Schedules note events precisely at targetTime on the Web Audio clock.
+   */
+  private scheduleStep(targetTime: number, step: number) {
+    if (!this.ctx) return;
+
+    const countryPatterns = [
+      { bass: 73.42, notes: [146.83, 185.0, 220.0, 293.66, 369.99, 440.0] }, // D Major High
+      { bass: 98.0, notes: [196.0, 246.94, 293.66, 392.0, 493.88, 587.33] }, // G Major
+      { bass: 110.0, notes: [220.0, 277.18, 329.63, 440.0, 554.37, 659.25] }, // A Major
+      { bass: 73.42, notes: [146.83, 220.0, 293.66, 185.0, 440.0, 369.99] }  // D Folk Variation
+    ];
+    const caveCrystalPitches = [164.81, 196.0, 220.0, 246.94, 329.63, 392.0, 493.88];
+    const jewelryChimes = [554.37, 659.25, 739.99, 880.0, 987.77, 1108.73];
+
+    // A. SURFACE: Procedural Banjo/Acoustic Guitar backup melody
+    if (this.surfaceGain) {
+      const patternIdx = Math.floor(step / 8) % countryPatterns.length;
+      const subStep = step % 8;
+      const pattern = countryPatterns[patternIdx];
+
+      // Alternating Bass (1 and 5)
+      if (subStep === 0 || subStep === 4) {
+        const bOsc = this.ctx.createOscillator();
+        const bGain = this.ctx.createGain();
+        bOsc.type = "triangle";
+        bOsc.frequency.setValueAtTime(subStep === 0 ? pattern.bass : pattern.bass * 1.5, targetTime);
+        bGain.gain.setValueAtTime(0.25, targetTime);
+        bGain.gain.exponentialRampToValueAtTime(0.001, targetTime + 0.38);
+        bOsc.connect(bGain);
+        bGain.connect(this.surfaceGain);
+        bOsc.start(targetTime);
+        bOsc.stop(targetTime + 0.38);
+      }
+
+      // Plucked acoustic string
+      const noteFreq = pattern.notes[subStep % pattern.notes.length];
+      if (subStep % 2 === 0 || ((step * 3) % 5 === 0)) {
+        const gOsc = this.ctx.createOscillator();
+        const gGain = this.ctx.createGain();
+        const gFilter = this.ctx.createBiquadFilter();
+        gOsc.type = "sawtooth";
+
+        if (subStep === 2 || subStep === 6) {
+          gOsc.frequency.setValueAtTime(noteFreq * 0.95, targetTime);
+          gOsc.frequency.exponentialRampToValueAtTime(noteFreq, targetTime + 0.05);
+        } else {
+          gOsc.frequency.setValueAtTime(noteFreq, targetTime);
+        }
+
+        gFilter.type = "lowpass";
+        gFilter.frequency.setValueAtTime(3200, targetTime);
+        gFilter.frequency.exponentialRampToValueAtTime(800, targetTime + 0.2);
+
+        gGain.gain.setValueAtTime(0.18, targetTime);
+        gGain.gain.exponentialRampToValueAtTime(0.001, targetTime + 0.24);
+
+        gOsc.connect(gFilter);
+        gFilter.connect(gGain);
+        gGain.connect(this.surfaceGain);
+        gOsc.start(targetTime);
+        gOsc.stop(targetTime + 0.24);
+      }
+    }
+
+    // B. CAVE: Resonant Cavern Droplets & Crystalline Echoes
+    if (this.caveGain) {
+      if (step % 16 === 0) {
+        const dOsc = this.ctx.createOscillator();
+        const dGain = this.ctx.createGain();
+        dOsc.frequency.setValueAtTime(45, targetTime);
+        dOsc.frequency.exponentialRampToValueAtTime(20, targetTime + 0.8);
+        dGain.gain.setValueAtTime(0.35, targetTime);
+        dGain.gain.exponentialRampToValueAtTime(0.0001, targetTime + 0.8);
+        dOsc.connect(dGain);
+        dGain.connect(this.caveGain);
+        dOsc.start(targetTime);
+        dOsc.stop(targetTime + 0.8);
+      }
+
+      if (step % 4 === 0 && ((step * 7) % 10 < 6)) {
+        const cFreq = caveCrystalPitches[(step >> 2) % caveCrystalPitches.length];
+        const cOsc = this.ctx.createOscillator();
+        const cGain = this.ctx.createGain();
+        cOsc.type = "sine";
+        cOsc.frequency.setValueAtTime(cFreq, targetTime);
+        cGain.gain.setValueAtTime(0.12, targetTime);
+        cGain.gain.exponentialRampToValueAtTime(0.0001, targetTime + 2.5);
+        cOsc.connect(cGain);
+        cGain.connect(this.caveGain);
+        cOsc.start(targetTime);
+        cOsc.stop(targetTime + 2.5);
+      }
+    }
+
+    // C. FACTORY: Synchronized Hydraulic Beat & Metallic Clockwork
+    if (this.factoryGain) {
+      const subStep = step % 8;
+      if (subStep === 0 || subStep === 4) {
+        const kickOsc = this.ctx.createOscillator();
+        const kickGain = this.ctx.createGain();
+        kickOsc.frequency.setValueAtTime(130, targetTime);
+        kickOsc.frequency.exponentialRampToValueAtTime(42, targetTime + 0.12);
+        kickGain.gain.setValueAtTime(0.3, targetTime);
+        kickGain.gain.exponentialRampToValueAtTime(0.001, targetTime + 0.15);
+        kickOsc.connect(kickGain);
+        kickGain.connect(this.factoryGain);
+        kickOsc.start(targetTime);
+        kickOsc.stop(targetTime + 0.15);
+      }
+
+      if (subStep % 2 === 1) {
+        const tickOsc = this.ctx.createOscillator();
+        const tickGain = this.ctx.createGain();
+        tickOsc.type = "square";
+        tickOsc.frequency.setValueAtTime(1200 + subStep * 100, targetTime);
+        tickGain.gain.setValueAtTime(0.04, targetTime);
+        tickGain.gain.exponentialRampToValueAtTime(0.001, targetTime + 0.05);
+        tickOsc.connect(tickGain);
+        tickGain.connect(this.factoryGain);
+        tickOsc.start(targetTime);
+        tickOsc.stop(targetTime + 0.05);
+      }
+    }
+
+    // D. JEWELRY: Sparkling Luxury Boutique Celesta Bells
+    if (this.jewelryGain) {
+      if (step % 2 === 0 && ((step * 5) % 10 < 8)) {
+        const jFreq = jewelryChimes[(step >> 1) % jewelryChimes.length];
+        const jOsc = this.ctx.createOscillator();
+        const jGain = this.ctx.createGain();
+        jOsc.type = "sine";
+        jOsc.frequency.setValueAtTime(jFreq, targetTime);
+        jGain.gain.setValueAtTime(0.14, targetTime);
+        jGain.gain.exponentialRampToValueAtTime(0.0001, targetTime + 0.8);
+        jOsc.connect(jGain);
+        jGain.connect(this.jewelryGain);
+        jOsc.start(targetTime);
+        jOsc.stop(targetTime + 0.8);
+      }
     }
   }
 
   setMusicZone(targetZone: AudioZone) {
     if (this.currentMusicZone === targetZone) return;
     this.currentMusicZone = targetZone;
+
+    // Crossfade background HTML5 audio element
+    if (this.countryAudioEl) {
+      if (targetZone === "surface") {
+        this.countryAudioEl.volume = this.volumes.music * 0.65;
+        if (this.countryAudioEl.paused) {
+          this.countryAudioEl.play().catch(() => {});
+        }
+      } else {
+        this.countryAudioEl.volume = 0;
+      }
+    }
 
     if (!this.ctx || !this.musicActive) return;
     const now = this.ctx.currentTime;
@@ -359,9 +574,15 @@ class SoundManager {
 
   stopMusic() {
     this.musicActive = false;
-    if (this.musicTimerId) {
-      clearInterval(this.musicTimerId);
-      this.musicTimerId = null;
+    if (this.lookaheadTimerId) {
+      clearInterval(this.lookaheadTimerId);
+      this.lookaheadTimerId = null;
+    }
+    if (this.workerTicker) {
+      this.workerTicker.stop();
+    }
+    if (this.countryAudioEl) {
+      this.countryAudioEl.pause();
     }
     this.caveDroneOscs.forEach(o => {
       try {
@@ -413,7 +634,9 @@ class SoundManager {
         gain.connect(this.ctx.destination);
         this.caveWindSource.start();
       } else if (!active && this.caveWindSource) {
-        this.caveWindSource.stop();
+        try {
+          this.caveWindSource.stop();
+        } catch {}
         this.caveWindSource = null;
       }
     } else if (type === "waterDrip") {
@@ -427,7 +650,9 @@ class SoundManager {
         gain.connect(this.ctx.destination);
         this.waterDripSource.start();
       } else if (!active && this.waterDripSource) {
-        this.waterDripSource.stop();
+        try {
+          this.waterDripSource.stop();
+        } catch {}
         this.waterDripSource = null;
       }
     }
@@ -435,22 +660,38 @@ class SoundManager {
 
   public async playMusic(type: "country", active: boolean) {
     await this.init();
-    if (!this.ctx) return;
     const vol = this.volumes.music;
 
     if (type === "country") {
-      if (active && !this.countryMusicSource && this.countryMusicBuffer) {
-        this.countryMusicSource = this.ctx.createBufferSource();
-        this.countryMusicSource.buffer = this.countryMusicBuffer;
-        this.countryMusicSource.loop = true;
-        const gain = this.ctx.createGain();
-        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
-        this.countryMusicSource.connect(gain);
-        gain.connect(this.ctx.destination);
-        this.countryMusicSource.start();
-      } else if (!active && this.countryMusicSource) {
-        this.countryMusicSource.stop();
-        this.countryMusicSource = null;
+      if (this.countryAudioEl) {
+        if (active) {
+          this.countryAudioEl.volume = vol * 0.65;
+          if (this.countryAudioEl.paused) {
+            this.countryAudioEl.play().catch(() => {});
+          }
+        } else {
+          this.countryAudioEl.volume = 0;
+        }
+      }
+
+      if (this.ctx && this.countryMusicBuffer) {
+        if (active && !this.countryMusicSource) {
+          try {
+            this.countryMusicSource = this.ctx.createBufferSource();
+            this.countryMusicSource.buffer = this.countryMusicBuffer;
+            this.countryMusicSource.loop = true;
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(vol * 0.65, this.ctx.currentTime);
+            this.countryMusicSource.connect(gain);
+            gain.connect(this.surfaceGain || this.ctx.destination);
+            this.countryMusicSource.start();
+          } catch {}
+        } else if (!active && this.countryMusicSource) {
+          try {
+            this.countryMusicSource.stop();
+          } catch {}
+          this.countryMusicSource = null;
+        }
       }
     }
   }

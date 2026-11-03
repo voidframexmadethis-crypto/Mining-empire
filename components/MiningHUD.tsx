@@ -234,6 +234,24 @@ export default function MiningHUD({
     }
   }, [cash, totalGemsCount, triggerMoneyPopup]);
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  React.useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFsChange);
+    return () => document.removeEventListener("fullscreenchange", handleFsChange);
+  }, []);
+
+  const handleToggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
   return (
     <div className="fixed inset-0 pointer-events-none z-40 flex flex-col justify-between p-3 md:p-6 font-sans">
       {/* Top Floating Control Bar */}
@@ -260,13 +278,27 @@ export default function MiningHUD({
           </div>
         </div>
 
-        {/* Upper-Right Discreet Corner HUD (Money + Menu + Clear) */}
+        {/* Upper-Right Corner HUD (Money + Fullscreen + Menu + Clear) */}
         <div className="flex items-center gap-2">
           {/* Discreet Upper-Right Money Counter */}
           <div className="bg-slate-900/90 backdrop-blur-md border border-emerald-500/50 rounded-xl px-3 py-1.5 text-emerald-300 font-mono text-xs font-bold shadow-lg flex items-center gap-1.5">
             <span>💵</span>
             <span>${cash.toLocaleString()}</span>
           </div>
+
+          {/* Fullscreen Mode Toggle */}
+          <button
+            onClick={handleToggleFullscreen}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-lg backdrop-blur-md flex items-center gap-1 cursor-pointer ${
+              isFullscreen
+                ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400"
+                : "bg-slate-900/90 hover:bg-slate-800 text-slate-300 border border-slate-700"
+            }`}
+            title="Toggle True Fullscreen Mode (F11)"
+          >
+            <span>{isFullscreen ? "⤢" : "⛶"}</span>
+            <span className="hidden sm:inline">{isFullscreen ? "Windowed" : "Fullscreen"}</span>
+          </button>
 
           {/* Upgrades & Menu Button */}
           <button
@@ -279,9 +311,9 @@ export default function MiningHUD({
           {/* Clear Screen Toggle */}
           <button
             onClick={onToggleClearScreen}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-lg backdrop-blur-md ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-lg backdrop-blur-md cursor-pointer ${
               clearScreenMode
-                ? "bg-cyan-500 text-slate-950 animate-pulse"
+                ? "bg-cyan-500 text-slate-950"
                 : "bg-slate-900/90 hover:bg-slate-800 text-slate-300 border border-slate-700"
             }`}
           >

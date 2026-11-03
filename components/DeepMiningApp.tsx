@@ -23,6 +23,7 @@ import StatisticsModal from "@/components/StatisticsModal";
 import LoadingScreen from "@/components/LoadingScreen";
 import AudioDiagnostics from "@/components/AudioDiagnostics";
 import { createMaxPowerDrill } from "@/lib/maxpower-drill";
+import { createHumanMinerRig, HumanMinerRig } from "@/lib/human-miner-rig";
 import { createMegaCaveSystem, MegaCaveSystem, getSmoothTargetY, MAMMOTH_CAVE_GENERATOR } from "@/lib/mega-cave-system";
 import { createSurfaceWorldSystem, SurfaceWorldSystem } from "@/lib/surface-world-system";
 import { LogisticsSystem } from "@/lib/transport-system";
@@ -264,6 +265,8 @@ export default function DeepMiningApp() {
   }, [inventory, jewelryInventory, remainingCaveGems, cash, backpackCapacity, upgrades]);
 
   const handleStartNewGame = useCallback(() => {
+    soundManager.ensureAudioContext();
+    soundManager.startMusic("surface");
     setIsMainMenuOpen(false);
     setIsLoadingScreen(true);
     setGameState("loading");
@@ -287,6 +290,8 @@ export default function DeepMiningApp() {
   }, []);
 
   const handleLoadGame = useCallback(() => {
+    soundManager.ensureAudioContext();
+    soundManager.startMusic("surface");
     const saved = saveSystem.load();
     if (saved) {
       setIsMainMenuOpen(false);
@@ -693,8 +698,9 @@ export default function DeepMiningApp() {
     const groundY = surfaceSystem.getGroundHeight(new THREE.Vector3(initialSpawnX, 0, initialSpawnZ));
     const finalSpawnY = groundY;
 
-    // Build Player Character Rig
-    const playerGroup = new THREE.Group();
+    // Build Realistic Procedural Human Miner Character Rig
+    const humanRig = createHumanMinerRig();
+    const playerGroup = humanRig.group;
     playerGroup.position.set(initialSpawnX, finalSpawnY, initialSpawnZ);
     playerGroup.rotation.y = 0; // Proper starting orientation
     scene.add(playerGroup);
@@ -706,84 +712,17 @@ export default function DeepMiningApp() {
     camera.position.set(initialSpawnX, finalSpawnY + 4.5, initialSpawnZ + 8.5);
     camera.lookAt(currentCamLookAtRef.current);
 
-    // Player Body Parts
-    const bodyMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.35, 0.75, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
-    );
-    bodyMesh.position.y = 0.725;
-    playerGroup.add(bodyMesh);
+    // References extracted from human rig for headlamp, gem tower, and drill
+    const backpackTowerGroup = humanRig.backpackTowerGroup;
+    const lampHousing = humanRig.lampHousing;
+    const lampLens = humanRig.lampLens;
+    const coreSpotlight = humanRig.coreSpotlight;
+    const fillSpotlight = humanRig.fillSpotlight;
+    const nearLight = humanRig.nearLight;
 
-    const backpackMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.65, 0.75, 0.35),
-      new THREE.MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.8 })
-    );
-    backpackMesh.position.set(0, 0.95, 0.38);
-    playerGroup.add(backpackMesh);
-
-    // 3D Gem Tower Group stacked on player's backpack
-    const backpackTowerGroup = new THREE.Group();
-    backpackTowerGroup.position.set(0, 1.35, 0.38);
-    playerGroup.add(backpackTowerGroup);
-
-    const helmetMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.3, 16, 12),
-      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3, metalness: 0.2 })
-    );
-    helmetMesh.position.y = 1.45;
-    playerGroup.add(helmetMesh);
-
-    // Hard Hat High-Power LED Housing & Lens
-    const lampHousing = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.09, 0.12, 12),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2, metalness: 0.8 })
-    );
-    lampHousing.rotation.x = Math.PI / 2;
-    lampHousing.position.set(0, 1.48, -0.3);
-    playerGroup.add(lampHousing);
-
-    const lampLens = new THREE.Mesh(
-      new THREE.SphereGeometry(0.06, 12, 8),
-      new THREE.MeshPhysicalMaterial({
-        color: 0xfffbeb,
-        emissive: 0xfffbeb,
-        emissiveIntensity: 3.5,
-        clearcoat: 1.0
-      })
-    );
-    lampLens.position.set(0, 1.48, -0.35);
-    playerGroup.add(lampLens);
-
-    // Core 400-Meter High-Power LED Spotlight
-    const coreSpotlight = new THREE.SpotLight(0xfffbeb, 120, 400, Math.PI / 12, 0.35, 1.2);
-    coreSpotlight.position.set(0, 1.48, -0.35);
-    const coreTarget = new THREE.Object3D();
-    coreTarget.position.set(0, 1.2, -400);
-    playerGroup.add(coreSpotlight);
-    playerGroup.add(coreTarget);
-    coreSpotlight.target = coreTarget;
-
-    // Peripheral Fill Spotlight (120-Meter Wide Illumination)
-    const fillSpotlight = new THREE.SpotLight(0xbae6fd, 35, 120, Math.PI / 3.5, 0.8, 1.5);
-    fillSpotlight.position.set(0, 1.48, -0.35);
-    const fillTarget = new THREE.Object3D();
-    fillTarget.position.set(0, 1.2, -120);
-    playerGroup.add(fillSpotlight);
-    playerGroup.add(fillTarget);
-    fillSpotlight.target = fillTarget;
-
-    // Near Foot Path Illumination
-    const nearLight = new THREE.PointLight(0xfffbeb, 15, 18);
-    nearLight.position.set(0, 1.5, -0.35);
-    playerGroup.add(nearLight);
-
-    // 3D MAXPOWER Cordless Construction Drill Rig
-    const drillArm = new THREE.Group();
-    drillArm.position.set(0.35, 0.72, -0.22);
-    playerGroup.add(drillArm);
-
+    // Attach 3D MAXPOWER Cordless Construction Drill Rig to human right hand
     const maxPowerDrill = createMaxPowerDrill();
-    drillArm.add(maxPowerDrill.group);
+    humanRig.drillMountGroup.add(maxPowerDrill.group);
 
     // Separate Jewelry Production Factory Engine at Z: 180 (Connected via outdoor road)
     const jewelryFactory = createJewelryFactory(scene, {
@@ -1377,6 +1316,10 @@ export default function DeepMiningApp() {
       setIsAutoDrillingGuarded(autoDrilling);
       soundManager.playDrillSound(autoDrilling, drillControllerRef.current.speed);
 
+      // Animate Realistic Procedural Human Miner Character Rig (Articulated Legs, Arms, Spine, Head)
+      const currentSpeed = isMoving ? (totalFwd !== 0 ? totalFwd * 6.4 : (totalStrafe !== 0 ? 5.0 : 0)) : 0;
+      humanRig.update(dt, isMoving, currentSpeed, autoDrilling);
+
       // Animate 3D MAXPOWER Cordless Drill Rig
       maxPowerDrill.update(dt, autoDrilling);
 
@@ -1714,6 +1657,7 @@ export default function DeepMiningApp() {
       workerRenderer.dispose();
       managementOffice.dispose();
       maxPowerDrill.dispose();
+      humanRig.dispose();
       logisticsSystem.dispose();
       supplyChainRenderer.dispose();
       if (jewelryFactoryRef.current) {
@@ -1804,7 +1748,7 @@ export default function DeepMiningApp() {
   }, [setLocationGuarded]);
 
   return (
-    <div className="w-full h-dvh relative overflow-hidden bg-slate-950 select-none">
+    <div className="fixed inset-0 w-full h-full overflow-hidden bg-slate-950 select-none touch-none">
       {/* 3D Canvas Container */}
       <div ref={mountRef} className="w-full h-full bg-[#0a0e14]" />
 
@@ -2007,12 +1951,17 @@ export default function DeepMiningApp() {
         onEnterGame={() => {
           setIsLoadingScreen(false);
           setGameState("playing");
+          soundManager.ensureAudioContext();
+          soundManager.startMusic("surface");
         }}
       />
 
       <PauseMenu
         isOpen={isPaused}
-        onClose={() => setIsPaused(false)}
+        onClose={() => {
+          setIsPaused(false);
+          soundManager.resumeAudioContextIfNeeded();
+        }}
         onSave={handleSaveGame}
         onExit={() => {
           setIsPaused(false);
