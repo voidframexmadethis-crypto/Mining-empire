@@ -59,6 +59,8 @@ type MiningHUDProps = {
   onZoomCameraIn?: () => void;
   onZoomCameraOut?: () => void;
   onPause?: () => void;
+  isFlying: boolean;
+  onToggleFly: () => void;
 };
 
 export default function MiningHUD({
@@ -102,7 +104,9 @@ export default function MiningHUD({
   onResetCamera,
   onZoomCameraIn,
   onZoomCameraOut,
-  onPause
+  onPause,
+  isFlying,
+  onToggleFly
 }: MiningHUDProps) {
   const [activeTab, setActiveTab] = useState<"gems" | "upgrades" | "jewelry" | "audio" | "achievements" | "none">("none");
   const [musicActive, setMusicActive] = useState(soundManager.isMusicActive());
@@ -285,6 +289,20 @@ export default function MiningHUD({
             <span>💵</span>
             <span>${cash.toLocaleString()}</span>
           </div>
+
+          {/* Enable Fly Toggle Button */}
+          <button
+            onClick={onToggleFly}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-lg backdrop-blur-md flex items-center gap-1.5 cursor-pointer ${
+              isFlying
+                ? "bg-amber-500 text-slate-950 font-black border border-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.5)] animate-pulse"
+                : "bg-slate-900/90 hover:bg-slate-800 text-amber-400 border border-amber-500/60"
+            }`}
+            title="Toggle Fly Mode to reach high gems"
+          >
+            <span>{isFlying ? "🚀" : "✈️"}</span>
+            <span>{isFlying ? "FLYING: ON" : "ENABLE FLY"}</span>
+          </button>
 
           {/* Fullscreen Mode Toggle */}
           <button

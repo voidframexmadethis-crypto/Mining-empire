@@ -91,6 +91,15 @@ export default function DeepMiningApp() {
 
   // Management, Workers, Encyclopedia & Achievements State
   const [isPaused, setIsPaused] = useState(false);
+  const [isFlying, setIsFlying] = useState(false);
+  const isFlyingRef = useRef(isFlying);
+  useEffect(() => {
+    isFlyingRef.current = isFlying;
+  }, [isFlying]);
+  const handleToggleFly = useCallback(() => {
+    setIsFlying(prev => !prev);
+  }, []);
+
   const [isOfficeOpen, setIsOfficeOpen] = useState(false);
   const [isEncyclopediaOpen, setIsEncyclopediaOpen] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
@@ -1231,25 +1240,26 @@ export default function DeepMiningApp() {
       
       const activeDeposits = [...world.deposits, ...megaCaveSystem.getDeposits()];
 
-      // RIGID GROUNDING & FOOT-TO-TERRAIN SNAPPING (NO FLYING, NO FLOATING, SOLID GROUND ALWAYS)
+      // RIGID GROUNDING & FOOT-TO-TERRAIN SNAPPING (STRICT GROUND BY DEFAULT UNLESS FLY MODE IS ENABLED)
       if (state === "mine" || state === "surface") {
         const groundY = state === "mine" 
           ? megaCaveSystem.getGroundHeight(playerGroup.position)
           : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
         
-        // Strict foot-to-ground alignment - solid ground snapping
-        if (playerGroup.position.y <= groundY + 0.2) {
-          playerGroup.position.y = groundY;
+        if (isFlyingRef.current) {
+          // Flying mode enabled: Ascend with space, descend with Shift/C
+          const flySpeed = 7.0;
           if (keys[" "]) {
-            playerGroup.position.y += 0.35;
+            playerGroup.position.y += flySpeed * dt;
+          }
+          if (keys["shift"] || keys["control"] || keys["c"]) {
+            playerGroup.position.y -= flySpeed * dt;
+          }
+          if (playerGroup.position.y < groundY) {
+            playerGroup.position.y = groundY;
           }
         } else {
-          // Smooth gravity pull back to solid ground
-          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, 45, dt);
-        }
-
-        // Hard ground ceiling snap - player can never clip below ground level
-        if (playerGroup.position.y < groundY) {
+          // Strict foot-to-ground alignment - solid ground snapping on surface and cave
           playerGroup.position.y = groundY;
         }
       }
@@ -1906,6 +1916,8 @@ export default function DeepMiningApp() {
             cameraDistanceRef.current = Math.min(16.0, cameraDistanceRef.current + 1.2);
           }}
           onPause={() => setIsPaused(true)}
+          isFlying={isFlying}
+          onToggleFly={handleToggleFly}
         />
       )}
       
