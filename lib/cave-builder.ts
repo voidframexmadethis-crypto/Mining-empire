@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GemOreDeposit } from "./gems";
+import { MAMMOTH_CAVE_GENERATOR, getSmoothTargetY } from "./mega-cave-system";
 
 export type WorldElements = {
   deposits: GemOreDeposit[];
@@ -15,34 +16,43 @@ export type WorldElements = {
   disposeWorld: () => void;
 };
 
-function createGeologicalTexture(baseColor: string, detailColor: string): THREE.CanvasTexture {
+function createGeologicalTexture(baseColor: string, detailColor: string, isGrass = false): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 512; canvas.height = 512;
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = baseColor;
   ctx.fillRect(0, 0, 512, 512);
   
-  // Geological variation
-  for (let i = 0; i < 5000; i++) {
-    ctx.globalAlpha = Math.random() * 0.3;
+  // Natural variation / blades
+  const count = isGrass ? 12000 : 7000;
+  for (let i = 0; i < count; i++) {
+    ctx.globalAlpha = Math.random() * 0.4;
     ctx.fillStyle = detailColor;
-    ctx.fillRect(Math.random()*512, Math.random()*512, 1 + Math.random()*3, 1 + Math.random()*3);
+    if (isGrass) {
+      // Grass blade streaks
+      const x = Math.random() * 512;
+      const y = Math.random() * 512;
+      ctx.fillRect(x, y, 1.5, 4 + Math.random() * 6);
+    } else {
+      ctx.fillRect(Math.random()*512, Math.random()*512, 1 + Math.random()*3, 1 + Math.random()*3);
+    }
   }
   
-  // Cracks
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = 0.5;
-  for (let i = 0; i < 40; i++) {
-    ctx.globalAlpha = Math.random() * 0.2;
+  // Strata / organic contour lines
+  ctx.strokeStyle = detailColor;
+  ctx.lineWidth = isGrass ? 0.8 : 1.2;
+  for (let i = 0; i < 50; i++) {
+    ctx.globalAlpha = Math.random() * 0.25;
     ctx.beginPath();
-    ctx.moveTo(Math.random()*512, Math.random()*512);
-    ctx.lineTo(Math.random()*512, Math.random()*512);
+    const y = Math.random() * 512;
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(170, y + (Math.random()-0.5)*50, 340, y + (Math.random()-0.5)*50, 512, y);
     ctx.stroke();
   }
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(4, 4);
+  texture.repeat.set(isGrass ? 8 : 4, isGrass ? 8 : 4);
   return texture;
 }
 
@@ -51,14 +61,14 @@ export function buildMiningWorld(scene: THREE.Scene): WorldElements {
   const lightPoles: THREE.PointLight[] = [];
   const ladders: THREE.Group[] = [];
 
-  const rockTex = createGeologicalTexture("#3a3835", "#6e685f");
-  const dirtTex = createGeologicalTexture("#4a3b2c", "#876c52");
-  const grassTex = createGeologicalTexture("#2d4a1d", "#4b7833");
+  const rockTex = createGeologicalTexture("#292524", "#575249", false);
+  const dirtTex = createGeologicalTexture("#4a3b2c", "#876c52", false);
+  const grassTex = createGeologicalTexture("#22c55e", "#15803d", true);
 
-  const rockMaterial = new THREE.MeshStandardMaterial({ map: rockTex, roughness: 0.9, metalness: 0.05 });
-  const dirtMaterial = new THREE.MeshStandardMaterial({ map: dirtTex, roughness: 0.95 });
-  const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x4d3319, roughness: 0.85 });
-  const metalMaterial = new THREE.MeshStandardMaterial({ color: 0x60666a, metalness: 0.85, roughness: 0.25 });
+  const rockMaterial = new THREE.MeshStandardMaterial({ map: rockTex, roughness: 0.35, metalness: 0.2 });
+  const dirtMaterial = new THREE.MeshStandardMaterial({ map: dirtTex, roughness: 0.4, metalness: 0.1 });
+  const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x4d3319, roughness: 0.35, metalness: 0.1 });
+  const metalMaterial = new THREE.MeshStandardMaterial({ color: 0x60666a, metalness: 0.9, roughness: 0.15 });
 
   const waterMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x0284c7,
@@ -99,6 +109,32 @@ export function buildMiningWorld(scene: THREE.Scene): WorldElements {
   waterLight.position.set(0, -2, -34);
   caveGroup.add(waterLight);
   lightPoles.push(waterLight);
+
+  // Wooden Bridge across Subterranean Ravine
+  const bridgeZ = -34;
+  const bridgeBaseY = getSmoothTargetY(bridgeZ) + MAMMOTH_CAVE_GENERATOR.getBaseElevation(0, bridgeZ) + MAMMOTH_CAVE_GENERATOR.getFloorDetail(0, bridgeZ);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(8, 0.4, 4), woodMaterial);
+  bridge.position.set(0, bridgeBaseY - 0.2, bridgeZ);
+  caveGroup.add(bridge);
+
+  // Wooden Cave Stairs
+  for (let s = 0; s < 5; s++) {
+    const stairZ = -10 + s * 1.0;
+    const stairY = getSmoothTargetY(stairZ) + MAMMOTH_CAVE_GENERATOR.getBaseElevation(0, stairZ) + MAMMOTH_CAVE_GENERATOR.getFloorDetail(0, stairZ);
+    const stair = new THREE.Mesh(new THREE.BoxGeometry(4, 0.3, 1), woodMaterial);
+    stair.position.set(0, stairY + s * 0.2, stairZ);
+    caveGroup.add(stair);
+  }
+
+  // Boulders on Cave Floor
+  for (let i = 0; i < 8; i++) {
+    const bX = (Math.random() - 0.5) * 20;
+    const bZ = -5 - Math.random() * 25;
+    const bY = getSmoothTargetY(bZ) + MAMMOTH_CAVE_GENERATOR.getBaseElevation(bX, bZ) + MAMMOTH_CAVE_GENERATOR.getFloorDetail(bX, bZ);
+    const boulder = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8 + Math.random() * 0.8, 1), rockMaterial);
+    boulder.position.set(bX, bY + 0.4, bZ);
+    caveGroup.add(boulder);
+  }
 
   const caveCeiling = new THREE.Mesh(new THREE.PlaneGeometry(CAVE_WIDTH + 4, CAVE_LENGTH + 6), rockMaterial);
   caveCeiling.rotation.x = Math.PI / 2;

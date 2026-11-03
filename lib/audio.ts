@@ -1,5 +1,7 @@
 // Real-Life Industrial Drill, Minecraft Stone Cracking, Synchronized Factory & Multi-Zone Ambient Audio Engine
 
+import * as THREE from "three";
+
 export type AudioZone = "cave" | "surface" | "factory" | "jewelry";
 
 class SoundManager {
@@ -55,10 +57,11 @@ class SoundManager {
     if (!this.ctx) return null;
     try {
       const response = await fetch(path);
+      if (!response.ok) return null;
       const arrayBuffer = await response.arrayBuffer();
       return await this.ctx.decodeAudioData(arrayBuffer);
-    } catch (e) {
-      console.error(`Failed to load audio asset: ${path}`, e);
+    } catch {
+      // Gracefully fallback to procedural audio synthesis if asset decoding fails
       return null;
     }
   }
@@ -909,6 +912,18 @@ class SoundManager {
       });
     } catch (e) {
       console.warn("Audio error:", e);
+    }
+  }
+
+  updateCaveSpatialAudio(playerPos: THREE.Vector3, isCave: boolean) {
+    if (!this.ctx || !this.musicActive) return;
+    if (isCave && this.caveFilter) {
+      const distToLeftWall = Math.abs(playerPos.x - (-15));
+      const distToRightWall = Math.abs(15 - playerPos.x);
+      const minWallDist = Math.min(distToLeftWall, distToRightWall);
+      const tunnelFactor = Math.max(0.15, 1 - (minWallDist / 15));
+      const targetCutoff = 280 + tunnelFactor * 950;
+      this.caveFilter.frequency.setValueAtTime(targetCutoff, this.ctx.currentTime);
     }
   }
 }

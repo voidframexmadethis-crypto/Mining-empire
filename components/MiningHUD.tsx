@@ -234,7 +234,7 @@ export default function MiningHUD({
 
   return (
     <div className="fixed inset-0 pointer-events-none z-40 flex flex-col justify-between p-3 md:p-6 font-sans">
-      {/* Top Floating Control Bar (Minimal & Unobtrusive) */}
+      {/* Top Floating Control Bar (Minimal & Unobtrusive Upper-Right Money Counter) */}
       <motion.div
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -247,24 +247,20 @@ export default function MiningHUD({
           <span className="text-emerald-400 font-mono">{depthFeet} FT</span>
         </div>
 
-        {/* Minimal Floating Triggers */}
+        {/* Upper-Right Discreet Corner HUD (Money + Menu + Clear) */}
         <div className="flex items-center gap-2">
-          {/* Money Interface Pop-up Trigger */}
-          <button
-            onClick={triggerMoneyPopup}
-            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-emerald-400 font-mono font-bold text-xs border border-emerald-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5"
-            title="Click to view Cash & Treasury (Auto-closes in 5s)"
-          >
-            <span>💵 ${cash.toLocaleString()}</span>
-          </button>
+          {/* Discreet Upper-Right Money Counter */}
+          <div className="bg-slate-900/90 backdrop-blur-md border border-emerald-500/50 rounded-xl px-3 py-1.5 text-emerald-300 font-mono text-xs font-bold shadow-lg flex items-center gap-1.5">
+            <span>💵</span>
+            <span>${cash.toLocaleString()}</span>
+          </div>
 
-          {/* Minions & Empire Pop-Up Menu Trigger */}
+          {/* Upgrades & Menu Button */}
           <button
-            onClick={triggerMenuPopup}
-            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-cyan-300 font-bold text-xs border border-cyan-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5"
-            title="Click to open Minions & Empire Pop-Up Menu (Auto-closes in 5s)"
+            onClick={() => setActiveTab(activeTab === "upgrades" ? "none" : "upgrades")}
+            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-cyan-300 font-bold text-xs border border-cyan-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1"
           >
-            <span>☰ Minions & Menu</span>
+            <span>☰ Menu</span>
           </button>
 
           {/* Clear Screen Toggle */}
@@ -276,107 +272,10 @@ export default function MiningHUD({
                 : "bg-slate-900/90 hover:bg-slate-800 text-slate-300 border border-slate-700"
             }`}
           >
-            {clearScreenMode ? "👁 Clear Screen On" : "👁 Clear Screen"}
+            {clearScreenMode ? "👁 On" : "👁 Clear"}
           </button>
         </div>
       </motion.div>
-
-      {/* Auto-Disappearing 5-Second Money Interface Pop-Up */}
-      <AnimatePresence>
-        {showMoneyPopup && !clearScreenMode && (
-          <motion.div
-            initial={{ y: -30, opacity: 0, scale: 0.9 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -30, opacity: 0, scale: 0.9 }}
-            className="pointer-events-auto self-center bg-slate-900/95 border-2 border-emerald-500/80 rounded-2xl px-6 py-3.5 shadow-2xl backdrop-blur-md text-center max-w-sm w-full font-mono mt-2 flex flex-col items-center gap-1 z-50"
-          >
-            <div className="text-[10px] uppercase font-sans tracking-widest text-emerald-400 font-extrabold flex items-center gap-2">
-              <span>💵 CASH & TREASURY BALANCE</span>
-              <span className="text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded-full font-sans font-normal border border-slate-700">
-                Disappears in 5s
-              </span>
-            </div>
-            <div className="text-2xl font-black text-emerald-300 tracking-tight">
-              ${cash.toLocaleString()}
-            </div>
-            <div className="flex items-center gap-4 text-xs font-sans text-slate-300 mt-1">
-              <span>🎒 Backpack: <strong className="text-amber-300 font-mono">{totalGemsCount} / {backpackCapacity}</strong></span>
-              <span>💎 Gems Value: <strong className="text-emerald-400 font-mono">${inventoryValue}</strong></span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Auto-Disappearing 5-Second Minions & Empire Pop-Up Menu */}
-      <AnimatePresence>
-        {showMenuPopup && !clearScreenMode && (
-          <motion.div
-            initial={{ y: -20, opacity: 0, scale: 0.95 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -20, opacity: 0, scale: 0.95 }}
-            className="pointer-events-auto self-center bg-slate-900/95 border-2 border-cyan-500/70 rounded-2xl p-4 shadow-2xl backdrop-blur-md max-w-2xl w-full mt-2 z-50"
-          >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
-              <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                <span>👑 MINIONS & EMPIRE POP-UP MENU</span>
-              </span>
-              <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
-                Auto-closes in 5s
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-bold">
-              <button
-                onClick={() => { onOpenOffice(); setShowMenuPopup(false); }}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-md transition-all active:scale-95 border border-cyan-400/40"
-              >
-                🏢 Office & Minions
-              </button>
-              <button
-                onClick={() => { setActiveTab("upgrades"); triggerMenuPopup(); }}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md transition-all active:scale-95 border border-emerald-400/40"
-              >
-                ⚡ Drill Upgrades
-              </button>
-              <button
-                onClick={() => { onOpenEncyclopedia(); setShowMenuPopup(false); }}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-slate-950 shadow-md transition-all active:scale-95 border border-amber-400/40"
-              >
-                📖 Encyclopedia
-              </button>
-              <button
-                onClick={() => { onOpenStatistics(); setShowMenuPopup(false); }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 shadow-md transition-all active:scale-95 border border-slate-700"
-              >
-                📊 Empire Stats
-              </button>
-              <button
-                onClick={() => { setActiveTab("gems"); triggerMenuPopup(); }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 shadow-md transition-all active:scale-95 border border-slate-700"
-              >
-                🎒 Gems (${inventoryValue})
-              </button>
-              <button
-                onClick={() => { setActiveTab("jewelry"); triggerMenuPopup(); }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-pink-300 shadow-md transition-all active:scale-95 border border-slate-700"
-              >
-                💍 Jewelry (${jewelryValue})
-              </button>
-              <button
-                onClick={() => { onOpenSettings(); setShowMenuPopup(false); }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 shadow-md transition-all active:scale-95 border border-slate-700"
-              >
-                ⚙️ Settings
-              </button>
-              <button
-                onClick={() => { setActiveTab("audio"); triggerMenuPopup(); }}
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 shadow-md transition-all active:scale-95 border border-slate-700"
-              >
-                🔊 Audio & Music
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
 
 

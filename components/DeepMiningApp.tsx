@@ -30,7 +30,7 @@ import { supplyChainManager } from "@/lib/supply-chain";
 import { SupplyChainRenderer } from "@/lib/supply-chain-renderer";
 import { RollingHazardSystem } from "@/lib/rolling-hazards";
 import { createWildlifeSystem, WildlifeSystem } from "@/lib/wildlife-system";
-import { LogFlumeSystem } from "@/lib/log-flume-system";
+
 
 type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
 
@@ -170,8 +170,8 @@ export default function DeepMiningApp() {
   const currentCamLookAtRef = useRef(new THREE.Vector3(0, 1.2, -6));
   const accumulatedWagesRef = useRef(0);
   const lastWageCommitTimeRef = useRef(0);
-  const [nearFlume, setNearFlume] = useState(false);
-  const flumeSystemRef = useRef<LogFlumeSystem | null>(null);
+
+
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
 
@@ -570,19 +570,17 @@ export default function DeepMiningApp() {
     const surfaceSystem = createSurfaceWorldSystem(scene);
     surfaceSystemRef.current = surfaceSystem;
 
-    // Synchronize initial elevator doors & position matching world state
+    // Synchronize initial elevator doors & position matching world state & continuous music
     if (initialSpawnConfig.worldState === "surface") {
       world.elevatorGroup.position.z = 100;
       world.elevatorDoors[0].position.x = -2.1;
       world.elevatorDoors[1].position.x = 2.1;
-      soundManager.setMusicZone("surface");
-      soundManager.playMusic("country", true);
+      soundManager.startMusic("surface");
     } else {
       world.elevatorGroup.position.z = 2;
       world.elevatorDoors[0].position.x = -2.1;
       world.elevatorDoors[1].position.x = 2.1;
-      soundManager.setMusicZone("cave");
-      soundManager.playMusic("country", false);
+      soundManager.startMusic("cave");
     }
 
     // Determine exact grounded Y elevation AFTER surface & cave collision systems are initialized
@@ -733,17 +731,6 @@ export default function DeepMiningApp() {
     const rollingHazardSystem = new RollingHazardSystem(scene);
     rollingHazardRef.current = rollingHazardSystem;
 
-    // Instantiate Log Flume System
-    const flumeSystem = new LogFlumeSystem({
-      scene,
-      camera,
-      onRideStart: () => {
-        achievementsSystem.updateProgress("log_flume_rider", 1, (reward) => {
-          setCash(c => c + reward);
-        });
-      }
-    });
-    flumeSystemRef.current = flumeSystem;
 
     // Wire Gem Collection Discovery hook to all ore deposits for Gem Encyclopedia & Achievements
     world.deposits.forEach(deposit => {
@@ -787,6 +774,25 @@ export default function DeepMiningApp() {
 
     thumbstickBase.appendChild(joystickKnob);
     mount.appendChild(joystickContainer);
+
+    const teleportSurfaceBtn = document.createElement("button");
+    teleportSurfaceBtn.innerHTML = "🚀 Surface";
+    teleportSurfaceBtn.style.cssText =
+      "position:absolute;bottom:32px;left:175px;padding:12px 16px;border-radius:14px;background:linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);color:#ffffff;font-size:12px;font-weight:bold;border:1px solid rgba(56,189,248,0.6);box-shadow:0 6px 16px rgba(0,0,0,0.6);cursor:pointer;z-index:50;transition:transform 0.1s ease;";
+    teleportSurfaceBtn.onclick = () => {
+      elevatorStateRef.current = "surface";
+      setLocationGuarded("Surface Mining Outpost");
+      setShowFactory(true);
+      const targetPos = new THREE.Vector3(0, 0, 100);
+      const groundY = surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0;
+      playerGroup.position.set(0, groundY, 100);
+      if (worldRef.current) worldRef.current.elevatorGroup.position.z = 100;
+      soundManager.startMusic("surface");
+      soundManager.playCashRegister();
+    };
+    mount.appendChild(teleportSurfaceBtn);
+
+
 
     const handlePointerMove = (e: PointerEvent) => {
       if (!joyActive) return;
@@ -920,14 +926,17 @@ export default function DeepMiningApp() {
         cameraYawRef.current += 0.25;
       }
       if (e.key.toLowerCase() === "e") {
-        const distToElevator = Math.hypot(playerGroup.position.x, playerGroup.position.z - 2);
+        const elevatorZ = elevatorStateRef.current === "surface" ? 100 : 2;
+        const distToElevator = Math.hypot(playerGroup.position.x - world.elevatorGroup.position.x, playerGroup.position.z - elevatorZ);
         const distToOffice = Math.hypot(playerGroup.position.x - 0, playerGroup.position.z - 129);
         if (distToOffice < 4.8 && elevatorStateRef.current === "surface") {
           setIsOfficeOpen(prev => !prev);
-        } else if (distToElevator < 3.2 && elevatorStateRef.current === "mine") {
-          triggerElevator("traveling-up");
-        } else if (distToElevator < 3.2 && elevatorStateRef.current === "surface") {
-          triggerElevator("traveling-down");
+        } else if (distToElevator < 6.5) {
+          if (elevatorStateRef.current === "mine") {
+            triggerElevator("traveling-up");
+          } else {
+            triggerElevator("traveling-down");
+          }
         } else {
           // If not interacting, rotate camera right
           cameraYawRef.current -= 0.25;
@@ -1071,7 +1080,7 @@ export default function DeepMiningApp() {
             setLocationGuarded("Surface Mining Outpost");
             setShowFactory(true);
             soundManager.playHyperElevatorSound(false);
-            soundManager.setMusicZone("surface");
+            soundManager.startMusic("surface");
 
             world.elevatorDoors[0].position.x = -2.1;
             world.elevatorDoors[1].position.x = 2.1;
@@ -1089,7 +1098,7 @@ export default function DeepMiningApp() {
             setLocationGuarded("Underground Cave Mine");
             setShowFactory(false);
             soundManager.playHyperElevatorSound(false);
-            soundManager.setMusicZone("cave");
+            soundManager.startMusic("cave");
 
             world.elevatorDoors[0].position.x = -2.1;
             world.elevatorDoors[1].position.x = 2.1;
@@ -1161,24 +1170,21 @@ export default function DeepMiningApp() {
       
       const activeDeposits = [...world.deposits, ...megaCaveSystem.getDeposits()];
 
-      // RIGID GROUNDING & FOOT-TO-TERRAIN SNAPPING (NO FLYING, NO FLOATING)
-      if ((state === "mine" || state === "surface") && (playerGroup.position.y < 90 || playerGroup.position.y > 95)) {
+      // RIGID GROUNDING & FOOT-TO-TERRAIN SNAPPING (NO FLYING, NO FLOATING, SOLID GROUND ALWAYS)
+      if (state === "mine" || state === "surface") {
         const groundY = state === "mine" 
           ? megaCaveSystem.getGroundHeight(playerGroup.position)
           : (surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(playerGroup.position) : 0);
         
-        // Strict foot-to-ground alignment - no flying or hovering
-        if (playerGroup.position.y < groundY + 0.1) {
-          // Ground snapping
-          playerGroup.position.y = THREE.MathUtils.lerp(playerGroup.position.y, groundY, Math.min(1, dt * 24));
-          
-          // Optional jump impulse from ground
+        // Strict foot-to-ground alignment - solid ground snapping
+        if (playerGroup.position.y <= groundY + 0.2) {
+          playerGroup.position.y = groundY;
           if (keys[" "]) {
             playerGroup.position.y += 0.35;
           }
         } else {
-          // Gravity pull to return player to ground smoothly
-          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, 35, dt);
+          // Smooth gravity pull back to solid ground
+          playerGroup.position.y = THREE.MathUtils.damp(playerGroup.position.y, groundY, 45, dt);
         }
 
         // Hard ground ceiling snap - player can never clip below ground level
@@ -1411,19 +1417,42 @@ export default function DeepMiningApp() {
         setNearJewelryShop(isNearJewelryShop);
       }
 
-      if (flumeSystemRef.current) {
-        flumeSystemRef.current.update(dt, playerGroup.position);
-        const distToBoarding = playerGroup.position.distanceTo(flumeSystemRef.current.boardingPosition);
-        const isNearFlume = distToBoarding < 8.0 && state === "mine";
-        setNearFlume(isNearFlume);
-      }
+
 
       // Update Audio Zone based on player coordinates
+      // Update Audio Zone & Localized 3D Spatial Audio based on player coordinates
       if (state === "mine") {
         soundManager.setMusicZone("cave");
         soundManager.playMusic("country", false);
         soundManager.playAmbientSound("caveWind", true);
         soundManager.playAmbientSound("waterDrip", true);
+        soundManager.updateCaveSpatialAudio(playerGroup.position, true);
+
+        // Minecraft-Style Gem Pickups (Walk near dropped/revealed gems -> goes straight into backpack)
+        const activeDeposits = [...world.deposits, ...megaCaveSystem.getDeposits()];
+        let collectedAny = false;
+        const newInventory = { ...inventory };
+        let currentTotalGems = Object.values(newInventory).reduce((a, b) => a + b, 0);
+
+        for (const deposit of activeDeposits) {
+          if (currentTotalGems >= backpackCapacity) break;
+          const collectedCount = deposit.collectNear(playerGroup.position, 5.0, backpackCapacity, currentTotalGems);
+          if (collectedCount > 0) {
+            collectedAny = true;
+            const depInv = deposit.getInventory();
+            for (const [gId, count] of Object.entries(depInv)) {
+              newInventory[gId] = (newInventory[gId] ?? 0) + count;
+            }
+            deposit.clearInventory();
+            currentTotalGems = Object.values(newInventory).reduce((a, b) => a + b, 0);
+            soundManager.playGemChime(0.5);
+          }
+        }
+
+        if (collectedAny) {
+          setInventory(newInventory);
+          soundManager.playCashRegister();
+        }
       } else if (state === "surface") {
         soundManager.playAmbientSound("caveWind", false);
         soundManager.playAmbientSound("waterDrip", false);
@@ -1638,13 +1667,13 @@ export default function DeepMiningApp() {
       maxPowerDrill.dispose();
       logisticsSystem.dispose();
       supplyChainRenderer.dispose();
-      flumeSystemRef.current?.dispose();
       if (jewelryFactoryRef.current) {
         jewelryFactoryRef.current.dispose();
       }
 
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       if (mount.contains(joystickContainer)) mount.removeChild(joystickContainer);
+      if (mount.contains(teleportSurfaceBtn)) mount.removeChild(teleportSurfaceBtn);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array to ensure the game loop starts once and stays alive
@@ -1756,16 +1785,6 @@ export default function DeepMiningApp() {
         onOpenStatistics={() => setIsStatisticsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         nearOffice={nearOffice}
-        nearFlume={nearFlume}
-        onBoardFlume={() => {
-          if (flumeSystemRef.current) {
-            if (flumeSystemRef.current.isPlayerBoarded) {
-              flumeSystemRef.current.exitPlayer();
-            } else {
-              flumeSystemRef.current.boardPlayer();
-            }
-          }
-        }}
         achievementToast={achievementToast}
         onRotateCameraLeft={() => {
           cameraYawRef.current += 0.35;
