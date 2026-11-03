@@ -22,6 +22,7 @@ class SoundManager {
   
   // Music Engine
   private musicActive: boolean = false;
+  private isMusicPaused: boolean = false;
   private currentMusicZone: AudioZone = "surface";
   private musicMasterGain: GainNode | null = null;
   private caveGain: GainNode | null = null;
@@ -283,6 +284,9 @@ class SoundManager {
     if (!this.ctx) return;
 
     if (this.musicActive) {
+      if (this.isMusicPaused) {
+        this.resumeMusic();
+      }
       this.setMusicZone(zone);
       await this.resumeAudioContextIfNeeded();
       return;
@@ -290,6 +294,7 @@ class SoundManager {
 
     try {
       this.musicActive = true;
+      this.isMusicPaused = false;
       this.currentMusicZone = zone;
       const now = this.ctx.currentTime;
 
@@ -378,7 +383,7 @@ class SoundManager {
    * guaranteeing that audio NEVER cuts out even if window timers are throttled in other browsers.
    */
   private tickScheduler() {
-    if (!this.ctx || !this.musicActive) return;
+    if (!this.ctx || !this.musicActive || this.isMusicPaused) return;
 
     if (this.ctx.state === "suspended") {
       this.ctx.resume().catch(() => {});
@@ -572,8 +577,72 @@ class SoundManager {
     ramp(this.jewelryGain, targetZone === "jewelry" ? 1.0 : 0.0);
   }
 
+  /**
+   * Pauses the background music when the game is paused.
+   */
+  public pauseMusic() {
+    if (!this.musicActive || this.isMusicPaused) return;
+    this.isMusicPaused = true;
+
+    // Pause lookahead timer & worker ticker
+    if (this.lookaheadTimerId) {
+      clearInterval(this.lookaheadTimerId);
+      this.lookaheadTimerId = null;
+    }
+    if (this.workerTicker) {
+      this.workerTicker.stop();
+    }
+
+    // Pause HTML5 country audio element
+    if (this.countryAudioEl && !this.countryAudioEl.paused) {
+      this.countryAudioEl.pause();
+    }
+
+    // Mute master music gain immediately
+    if (this.musicMasterGain && this.ctx) {
+      this.musicMasterGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    }
+  }
+
+  /**
+   * Resumes the background music when the player resumes the game.
+   */
+  public resumeMusic() {
+    if (!this.musicActive || !this.isMusicPaused) return;
+    this.isMusicPaused = false;
+
+    // Unpause HTML5 country audio element if in surface zone
+    if (this.countryAudioEl && this.currentMusicZone === "surface") {
+      this.countryAudioEl.volume = this.volumes.music * 0.65;
+      this.countryAudioEl.play().catch(() => {});
+    }
+
+    // Restore master music gain
+    if (this.musicMasterGain && this.ctx) {
+      this.musicMasterGain.gain.setValueAtTime(this.volumes.music * 0.5, this.ctx.currentTime);
+    }
+
+    // Synchronize lookahead step time to now
+    if (this.ctx) {
+      this.nextStepTime = this.ctx.currentTime + 0.05;
+    }
+
+    // Restart tickers
+    if (this.workerTicker) {
+      this.workerTicker.start();
+    }
+    if (this.lookaheadTimerId) clearInterval(this.lookaheadTimerId);
+    this.lookaheadTimerId = setInterval(() => {
+      this.tickScheduler();
+    }, 80);
+
+    // Pre-schedule immediate lookahead notes
+    this.tickScheduler();
+  }
+
   stopMusic() {
     this.musicActive = false;
+    this.isMusicPaused = false;
     if (this.lookaheadTimerId) {
       clearInterval(this.lookaheadTimerId);
       this.lookaheadTimerId = null;
@@ -583,6 +652,7 @@ class SoundManager {
     }
     if (this.countryAudioEl) {
       this.countryAudioEl.pause();
+      this.countryAudioEl.currentTime = 0;
     }
     this.caveDroneOscs.forEach(o => {
       try {

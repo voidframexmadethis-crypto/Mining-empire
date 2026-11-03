@@ -9,7 +9,7 @@ import EncyclopediaModal from "@/components/EncyclopediaModal";
 import { createSurfaceFactory } from "@/lib/factory-engine";
 import { createJewelryFactory } from "@/lib/jewelry-factory";
 import { GAME_GEMS, GemOreDeposit, GemDrillController, GemType, getSharedCrystalMaterial } from "@/lib/gems";
-import { soundManager } from "@/lib/audio";
+import { soundManager, AudioZone } from "@/lib/audio";
 import { buildMiningWorld } from "@/lib/cave-builder";
 import { managementSystem } from "@/lib/management-system";
 import { achievementsSystem } from "@/lib/achievements-system";
@@ -145,6 +145,11 @@ export default function DeepMiningApp() {
   const isPausedRef = useRef(isPaused);
   useEffect(() => {
     isPausedRef.current = isPaused;
+    if (isPaused) {
+      soundManager.pauseMusic();
+    } else {
+      soundManager.resumeMusic();
+    }
   }, [isPaused]);
 
   const currentCamLookAtRef = useRef(new THREE.Vector3(0, 1.2, -6));
@@ -241,15 +246,20 @@ export default function DeepMiningApp() {
   }, []);
 
   const handleSaveGame = useCallback(() => {
+    const currentInventory = inventoryRef.current || inventory;
+    const currentCash = sharedStateRef.current.get('cash') ?? cash;
+    const currentCap = sharedStateRef.current.get('backpackCapacity') ?? backpackCapacity;
+    const currentUpgrades = sharedStateRef.current.get('upgrades') ?? upgrades;
+
     saveSystem.save({
-      cash: sharedStateRef.current.get('cash') ?? cash,
-      inventory: inventory,
+      cash: currentCash,
+      inventory: currentInventory,
       jewelryInventory: jewelryInventory,
-      backpackCapacity: sharedStateRef.current.get('backpackCapacity') ?? backpackCapacity,
+      backpackCapacity: currentCap,
       depthFeet: lastDepthRef.current,
       location: lastLocationRef.current,
       remainingCaveGems: remainingCaveGems,
-      upgrades: sharedStateRef.current.get('upgrades') ?? upgrades,
+      upgrades: currentUpgrades,
       hasCompletedTutorial: true,
       savedAt: new Date().toISOString(),
       playerPos: playerGroupRef.current ? {
@@ -257,6 +267,7 @@ export default function DeepMiningApp() {
         y: playerGroupRef.current.position.y,
         z: playerGroupRef.current.position.z
       } : undefined,
+      playerYaw: playerYawRef.current,
       worldState: elevatorStateRef.current === "mine" ? "mine" : "surface"
     });
     soundManager.playCashRegister();
@@ -268,14 +279,20 @@ export default function DeepMiningApp() {
     soundManager.ensureAudioContext();
     soundManager.startMusic("surface");
     setIsMainMenuOpen(false);
-    setIsLoadingScreen(true);
-    setGameState("loading");
+    setIsPaused(false);
+    setClearScreenMode(false);
+    setIsLoadingScreen(false);
+    setGameState("playing");
+
     // Initial state setup for new game
     setCash(0);
+    cashRef.current = 0;
+    sharedStateRef.current.set('cash', 0);
     setInventory({});
     setJewelryInventory({});
     setBackpackCapacity(STARTING_BACKPACK_CAPACITY);
-    setUpgrades({
+    sharedStateRef.current.set('backpackCapacity', STARTING_BACKPACK_CAPACITY);
+    const initialUpgrades = {
       power: 24.4,
       speed: 1.35,
       backpack: STARTING_BACKPACK_CAPACITY,
@@ -283,32 +300,103 @@ export default function DeepMiningApp() {
       headlampOptics: 1.0,
       scanner: false,
       drillBitTier: 0
-    });
+    };
+    setUpgrades(initialUpgrades);
+    sharedStateRef.current.set('upgrades', initialUpgrades);
+    drillControllerRef.current.power = 24.4;
+    drillControllerRef.current.speed = 1.35;
+    drillControllerRef.current.scanner = false;
+
     setRemainingCaveGems(INITIAL_CAVE_GEMS);
     setLocation("Surface Mining Outpost");
     setDepthFeet(0);
+    lastLocationRef.current = "Surface Mining Outpost";
+    lastDepthRef.current = 0;
+
+    if (playerGroupRef.current) {
+      playerGroupRef.current.position.set(DEFAULT_SURFACE_SPAWN.x, 0, DEFAULT_SURFACE_SPAWN.z);
+      playerGroupRef.current.rotation.y = 0;
+    }
+    playerYawRef.current = 0;
+    cameraYawRef.current = 0;
+    elevatorStateRef.current = "surface";
+    if (worldRef.current) {
+      worldRef.current.elevatorGroup.position.z = 100;
+    }
   }, []);
 
   const handleLoadGame = useCallback(() => {
     soundManager.ensureAudioContext();
-    soundManager.startMusic("surface");
     const saved = saveSystem.load();
     if (saved) {
       setIsMainMenuOpen(false);
-      setIsLoadingScreen(true);
-      setGameState("loading");
+      setIsPaused(false);
+      setClearScreenMode(false);
+      setIsLoadingScreen(false);
+      setGameState("playing");
       
+      // 1. Restore Cash
       setCash(saved.cash);
+      cashRef.current = saved.cash;
+      sharedStateRef.current.set('cash', saved.cash);
+
+      // 2. Restore Inventory & Jewelry
       setInventory(saved.inventory || {});
       setJewelryInventory(saved.jewelryInventory || {});
-      setBackpackCapacity(saved.backpackCapacity || STARTING_BACKPACK_CAPACITY);
-      setUpgrades({
+      const cap = saved.backpackCapacity || STARTING_BACKPACK_CAPACITY;
+      setBackpackCapacity(cap);
+      sharedStateRef.current.set('backpackCapacity', cap);
+
+      // 3. Restore Upgrades & Synchronize Drill Engine Specs
+      const loadedUpgrades = {
         ...saved.upgrades,
         headlampOptics: saved.upgrades.headlampOptics ?? 1.0
-      });
+      };
+      setUpgrades(loadedUpgrades);
+      sharedStateRef.current.set('upgrades', loadedUpgrades);
+      drillControllerRef.current.power = loadedUpgrades.power;
+      drillControllerRef.current.speed = loadedUpgrades.speed;
+      drillControllerRef.current.scanner = loadedUpgrades.scanner;
+
+      // 4. Restore Cave Remaining Gems
       setRemainingCaveGems(saved.remainingCaveGems || INITIAL_CAVE_GEMS);
-      setLocation("Surface Mining Outpost");
-      setDepthFeet(0);
+
+      // 5. Restore Location & Depth
+      const loc = saved.location || "Surface Mining Outpost";
+      const depth = saved.depthFeet ?? 0;
+      setLocation(loc);
+      setDepthFeet(depth);
+      lastLocationRef.current = loc;
+      lastDepthRef.current = depth;
+
+      // 6. Restore 3D Player Position & Orientation
+      if (playerGroupRef.current) {
+        if (saved.playerPos) {
+          playerGroupRef.current.position.set(saved.playerPos.x, saved.playerPos.y, saved.playerPos.z);
+        } else {
+          playerGroupRef.current.position.set(DEFAULT_SURFACE_SPAWN.x, 0, DEFAULT_SURFACE_SPAWN.z);
+        }
+        if (typeof saved.playerYaw === "number") {
+          playerGroupRef.current.rotation.y = saved.playerYaw;
+          playerYawRef.current = saved.playerYaw;
+          cameraYawRef.current = saved.playerYaw;
+        }
+      }
+
+      // 7. Restore Elevator State
+      if (saved.worldState) {
+        elevatorStateRef.current = saved.worldState;
+        if (worldRef.current) {
+          worldRef.current.elevatorGroup.position.z = saved.worldState === "mine" ? 2 : 100;
+        }
+      }
+
+      // 8. Start proper soundtrack for the restored location
+      const targetZone: AudioZone = loc.includes("Mine") ? "cave" : (loc.includes("Plant") || loc.includes("Factory") ? "factory" : "surface");
+      soundManager.startMusic(targetZone);
+
+      setFactoryNotification("✅ Operations & Progress Restored!");
+      setTimeout(() => setFactoryNotification(null), 3000);
     } else {
       setFactoryNotification("❌ No saved data found. Starting new operations.");
       setTimeout(() => setFactoryNotification(null), 3000);
@@ -438,7 +526,6 @@ export default function DeepMiningApp() {
   // Helper functions for guarded state updates (Memoized to prevent unnecessary re-renders)
   const setLocationGuarded = useCallback((newLoc: string) => {
     if (lastLocationRef.current !== newLoc) {
-      // eslint-disable-next-line react-hooks/immutability
       lastLocationRef.current = newLoc;
       setLocation(newLoc);
     }
@@ -446,7 +533,6 @@ export default function DeepMiningApp() {
 
   const setDepthGuarded = useCallback((newDepth: number) => {
     if (lastDepthRef.current !== newDepth) {
-      // eslint-disable-next-line react-hooks/immutability
       lastDepthRef.current = newDepth;
       setDepthFeet(newDepth);
     }
@@ -1731,7 +1817,6 @@ export default function DeepMiningApp() {
   }, []);
 
   const handleTeleportSurface = useCallback(() => {
-    // eslint-disable-next-line react-hooks/immutability
     elevatorStateRef.current = "surface";
     setLocationGuarded("Surface Mining Outpost");
     setShowFactory(true);
@@ -1825,7 +1910,7 @@ export default function DeepMiningApp() {
       )}
       
       {/* Teleport Button (Middle Bottom) */}
-      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+      {gameState === "playing" && !clearScreenMode && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
           <button
             onClick={handleTeleportSurface}
@@ -1837,7 +1922,7 @@ export default function DeepMiningApp() {
       )}
 
       {/* Joystick Overlay with Mobile Quick-Turn Buttons (Bottom Left) */}
-      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+      {gameState === "playing" && !clearScreenMode && (
         <div className="fixed bottom-8 left-8 z-50 pointer-events-auto flex items-end gap-3">
           <Joystick 
             onMove={(x, y) => {
@@ -1875,7 +1960,7 @@ export default function DeepMiningApp() {
       )}
       
       {/* Minimap Overlay (Top Right - Under HUD) */}
-      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+      {gameState === "playing" && !clearScreenMode && (
         <div className="fixed top-24 right-8 z-50 pointer-events-auto">
           <Minimap 
             playerPos={minimapPlayerPos}
@@ -1960,11 +2045,13 @@ export default function DeepMiningApp() {
         isOpen={isPaused}
         onClose={() => {
           setIsPaused(false);
-          soundManager.resumeAudioContextIfNeeded();
+          setClearScreenMode(false);
+          soundManager.resumeMusic();
         }}
         onSave={handleSaveGame}
         onExit={() => {
           setIsPaused(false);
+          soundManager.stopMusic();
           setGameState("menu");
           setIsMainMenuOpen(true);
         }}

@@ -20,6 +20,7 @@ export type GameSaveState = {
   hasCompletedTutorial: boolean;
   savedAt: string;
   playerPos?: { x: number; y: number; z: number };
+  playerYaw?: number;
   worldState?: "surface" | "mine";
 };
 
