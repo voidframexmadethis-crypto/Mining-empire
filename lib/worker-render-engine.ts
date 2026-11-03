@@ -185,6 +185,7 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
   }
 
   function updateWorkers(workers: Worker[]) {
+    console.log("Updating workers, count:", workers.length);
     // Clear old workers
     while (root.children.length > 0) {
       const child = root.children[0];
@@ -201,6 +202,7 @@ export function createWorkerRenderer(scene: THREE.Scene): WorkerRenderer {
 
     // Spawn workers at their assigned machine or break lounge
     workers.forEach((worker, i) => {
+      console.log("Spawning worker:", worker.name, worker.assignedMachine);
       const rig = createWorkerRig(worker);
 
       // Find machine position

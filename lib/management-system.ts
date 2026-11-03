@@ -51,6 +51,8 @@ export type BusinessUpgrades = {
   machineSpeedLevel: number; // +20% machine processing speed per level
   productionCapacityLevel: number; // +30% capacity per level
   storageCapacityLevel: number; // +25% warehouse capacity per level
+  backpackCapacityLevel: number; // +10 gems per level
+  workerCapacityLevel: number; // +1 worker per level
   gemQualityLevel: number; // +15% gem value per level
   jewelryEfficiencyLevel: number; // +20% jewelry revenue per level
   businessMarketingLevel: number; // +15% retail sale price per level
@@ -92,6 +94,8 @@ export const INITIAL_BUSINESS_UPGRADES: BusinessUpgrades = {
   machineSpeedLevel: 0,
   productionCapacityLevel: 0,
   storageCapacityLevel: 0,
+  backpackCapacityLevel: 0,
+  workerCapacityLevel: 0,
   gemQualityLevel: 0,
   jewelryEfficiencyLevel: 0,
   businessMarketingLevel: 0
@@ -129,12 +133,18 @@ export class ManagementSystem {
     return [...this.workers];
   }
 
+  getMaxWorkers(): number {
+    return 10 + this.upgrades.workerCapacityLevel;
+  }
+
   hireWorker(
     category: WorkerCategory,
     assignedFacility: FacilityType = "none",
     assignedMachine = "Unassigned",
     preferredRole?: WorkerRole
-  ): Worker {
+  ): Worker | null {
+    if (this.workers.length >= this.getMaxWorkers()) return null;
+
     const id = "worker_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
     const name = WORKER_NAMES[Math.floor(Math.random() * WORKER_NAMES.length)];
     
@@ -285,11 +295,17 @@ export class ManagementSystem {
       machineSpeedLevel: 500,
       productionCapacityLevel: 400,
       storageCapacityLevel: 300,
+      backpackCapacityLevel: 500,
+      workerCapacityLevel: 1000,
       gemQualityLevel: 650,
       jewelryEfficiencyLevel: 800,
       businessMarketingLevel: 600
     };
     return Math.round(baseCosts[type] * Math.pow(1.6, level));
+  }
+
+  getBackpackCapacityBonus(): number {
+    return this.upgrades.backpackCapacityLevel * 10;
   }
 
   purchaseUpgrade(type: keyof BusinessUpgrades): { success: boolean; cost: number } {

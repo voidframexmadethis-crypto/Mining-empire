@@ -50,11 +50,55 @@ export function createSurfaceWorldSystem(scene: THREE.Scene): SurfaceWorldSystem
     terrain.position.set(chunkCenterX, 0, chunkCenterZ);
     chunkGroup.add(terrain);
 
-    // 2. Procedural Bridges/Stairs
-    if (Math.random() > 0.8) {
-        const bridge = new THREE.Mesh(new THREE.BoxGeometry(10, 0.5, 4), bridgeMat);
-        bridge.position.set(chunkCenterX, 2, chunkCenterZ);
-        chunkGroup.add(bridge);
+    // 2. Procedural Decorations: Rocks, Flowers, Grass (Massive density upgrade)
+    for (let i = 0; i < 120; i++) {
+      const rx = chunkCenterX + (Math.random() - 0.5) * CHUNK_SIZE;
+      const rz = chunkCenterZ + (Math.random() - 0.5) * CHUNK_SIZE;
+      const ry = getGroundHeight(new THREE.Vector3(rx, 0, rz));
+      
+      const rand = Math.random();
+      if (rand < 0.25) {
+        // Rocks - Varied sizes and colors
+        const rockSize = 0.4 + Math.random() * 1.2;
+        const rock = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(rockSize), 
+          new THREE.MeshStandardMaterial({ color: Math.random() > 0.5 ? 0x575249 : 0x7a746a, roughness: 0.9 })
+        );
+        rock.position.set(rx, ry + rockSize * 0.4, rz);
+        rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+        chunkGroup.add(rock);
+      } else if (rand < 0.55) {
+        // Flowers - More colors (Red, Pink, Yellow, White)
+        const flowerColor = [0xff69b4, 0xffd700, 0xffffff, 0xff4500][Math.floor(Math.random() * 4)];
+        const flower = new THREE.Mesh(
+          new THREE.SphereGeometry(0.18, 8, 8), 
+          new THREE.MeshBasicMaterial({ color: flowerColor })
+        );
+        flower.position.set(rx, ry + 0.15, rz);
+        
+        // Add a small stem
+        const stem = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.3),
+          new THREE.MeshBasicMaterial({ color: 0x2d5a27 })
+        );
+        stem.position.set(rx, ry + 0.1, rz);
+        chunkGroup.add(stem);
+        chunkGroup.add(flower);
+      } else {
+        // Tall Grass - Clumps
+        for (let j = 0; j < 3; j++) {
+          const gx = rx + (Math.random() - 0.5) * 0.5;
+          const gz = rz + (Math.random() - 0.5) * 0.5;
+          const grassHeight = 0.3 + Math.random() * 0.5;
+          const grass = new THREE.Mesh(
+            new THREE.BoxGeometry(0.08, grassHeight, 0.08), 
+            new THREE.MeshStandardMaterial({ color: 0x3d6a2d, roughness: 0.9 })
+          );
+          grass.position.set(gx, ry + grassHeight / 2, gz);
+          grass.rotation.y = Math.random() * Math.PI;
+          chunkGroup.add(grass);
+        }
+      }
     }
 
     scene.add(chunkGroup);

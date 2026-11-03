@@ -58,6 +58,7 @@ type MiningHUDProps = {
   onResetCamera?: () => void;
   onZoomCameraIn?: () => void;
   onZoomCameraOut?: () => void;
+  onPause?: () => void;
 };
 
 export default function MiningHUD({
@@ -100,7 +101,8 @@ export default function MiningHUD({
   onRotateCameraRight,
   onResetCamera,
   onZoomCameraIn,
-  onZoomCameraOut
+  onZoomCameraOut,
+  onPause
 }: MiningHUDProps) {
   const [activeTab, setActiveTab] = useState<"gems" | "upgrades" | "jewelry" | "audio" | "achievements" | "none">("none");
   const [musicActive, setMusicActive] = useState(soundManager.isMusicActive());
@@ -254,6 +256,14 @@ export default function MiningHUD({
             <span>💵</span>
             <span>${cash.toLocaleString()}</span>
           </div>
+
+          {/* Pause Button */}
+          <button
+            onClick={onPause}
+            className="px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-amber-400 font-bold text-xs border border-amber-500/50 shadow-lg backdrop-blur-md transition-all active:scale-95 flex items-center gap-1"
+          >
+            <span>⏸ Pause</span>
+          </button>
 
           {/* Upgrades & Menu Button */}
           <button

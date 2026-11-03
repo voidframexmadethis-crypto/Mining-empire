@@ -465,6 +465,24 @@ export default function ManagementModal({
                   bonus: `+${upgrades.productionCapacityLevel * 30}% Batch Size`
                 },
                 {
+                  key: "storageCapacityLevel" as const,
+                  title: "🗄️ Warehouse Storage Capacity",
+                  desc: "Increase storage space for gems and materials (+25% capacity per level).",
+                  bonus: `+${upgrades.storageCapacityLevel * 25}% Warehouse Size`
+                },
+                {
+                  key: "backpackCapacityLevel" as const,
+                  title: "🎒 Backpack Capacity",
+                  desc: "Upgrade backpack size to carry more gems from the mine (+10 gems per level).",
+                  bonus: `+${upgrades.backpackCapacityLevel * 10} Gem Capacity`
+                },
+                {
+                  key: "workerCapacityLevel" as const,
+                  title: "👥 Worker Workforce Capacity",
+                  desc: "Expand the total number of workers you can hire for your empire (+1 worker per level).",
+                  bonus: `+${upgrades.workerCapacityLevel} Max Workers`
+                },
+                {
                   key: "gemQualityLevel" as const,
                   title: "💎 Precision Laser Faceting & Quality",
                   desc: "Refine gemstone crystal facets and clarity, permanently boosting selling price (+20% value).",

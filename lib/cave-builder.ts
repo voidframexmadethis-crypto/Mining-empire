@@ -205,6 +205,33 @@ export function buildMiningWorld(scene: THREE.Scene): WorldElements {
   surfaceGround.position.y = -0.05;
   surfaceGround.receiveShadow = true;
   surfaceGroup.add(surfaceGround);
+  
+  // Surface Decorations (Rocks, Flowers, Grass)
+  for (let i = 0; i < 40; i++) {
+    const rx = (Math.random() - 0.5) * 80;
+    const rz = (Math.random() - 0.5) * 80;
+    const rand = Math.random();
+    
+    if (rand < 0.25) {
+      // Rocks
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 + Math.random() * 0.8), rockMaterial);
+      rock.position.set(rx, 0.4, rz);
+      rock.rotation.set(Math.random(), Math.random(), Math.random());
+      surfaceGroup.add(rock);
+    } else if (rand < 0.6) {
+      // Flowers
+      const flowerColor = Math.random() > 0.5 ? 0xf87171 : 0xfacc15;
+      const flower = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), new THREE.MeshStandardMaterial({ color: flowerColor, emissive: flowerColor, emissiveIntensity: 0.2 }));
+      flower.position.set(rx, 0.15, rz);
+      surfaceGroup.add(flower);
+    } else {
+      // Tall Grass Clumps
+      const grass = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.6, 0.15), new THREE.MeshStandardMaterial({ color: 0x166534 }));
+      grass.position.set(rx, 0.3, rz);
+      surfaceGroup.add(grass);
+    }
+  }
+  
   scene.add(surfaceGroup);
 
   // ELEVATOR
@@ -213,6 +240,21 @@ export function buildMiningWorld(scene: THREE.Scene): WorldElements {
   const platformMesh = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.3, 5.2), new THREE.MeshStandardMaterial({ color: 0x374151, metalness: 0.9, roughness: 0.3 }));
   platformMesh.position.y = 0.15;
   elevatorGroup.add(platformMesh);
+
+  // Interior Decorations
+  const table = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.8), new THREE.MeshStandardMaterial({ color: 0x4d3319 }));
+  table.position.set(0, 0.6, 0);
+  elevatorGroup.add(table);
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 2 }));
+  lamp.position.set(0, 1.5, 0);
+  elevatorGroup.add(lamp);
+  const seat1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+  seat1.position.set(1.5, 0.4, 0);
+  elevatorGroup.add(seat1);
+  const seat2 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+  seat2.position.set(-1.5, 0.4, 0);
+  elevatorGroup.add(seat2);
+
   const leftDoor = new THREE.Mesh(new THREE.BoxGeometry(2.3, 3.6, 0.1), new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.9 }));
   leftDoor.position.set(-1.15, 2.0, 2.4);
   elevatorGroup.add(leftDoor);

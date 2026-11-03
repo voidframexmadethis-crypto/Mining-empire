@@ -30,9 +30,15 @@ import { supplyChainManager } from "@/lib/supply-chain";
 import { SupplyChainRenderer } from "@/lib/supply-chain-renderer";
 import { RollingHazardSystem } from "@/lib/rolling-hazards";
 import { createWildlifeSystem, WildlifeSystem } from "@/lib/wildlife-system";
+import { createWeatherSystem, WeatherSystem } from "@/lib/weather-system";
+import PauseMenu from "@/components/PauseMenu";
+import Minimap from "@/components/Minimap";
+import MainMenu from "@/components/MainMenu";
+import Joystick from "@/components/Joystick";
 
 
 type ElevatorState = "mine" | "traveling-up" | "surface" | "traveling-down";
+type GameState = "menu" | "loading" | "playing";
 
 // Module-level reusable math vectors for zero GC in the game render loop
 const _lookAheadPos = new THREE.Vector3();
@@ -56,76 +62,40 @@ export default function DeepMiningApp() {
   const STARTING_BACKPACK_CAPACITY = 13;
   const DEFAULT_SURFACE_SPAWN = { x: 0, y: 0, z: 104 };
 
-  const savedState = typeof window !== "undefined" ? saveSystem.load() : null;
+  const [gameState, setGameState] = useState<GameState>("menu");
+  const [isMainMenuOpen, setIsMainMenuOpen] = useState(true);
 
-  // Resolve player spawn location & world state cleanly for new & returning games
-  const initialSpawnConfig = (() => {
-    if (!savedState) {
-      return {
-        worldState: "surface" as const,
-        location: "Surface Mining Outpost & Original Factory",
-        depthFeet: 0,
-        playerPos: { ...DEFAULT_SURFACE_SPAWN }
-      };
-    }
-
-    const isSavedAsCave = savedState.worldState === "mine" ||
-      (savedState.location && savedState.location.includes("Cave") && !savedState.location.includes("Outpost") && !savedState.location.includes("Surface"));
-
-    if (isSavedAsCave && savedState.playerPos) {
-      const { x, y, z } = savedState.playerPos;
-      if (typeof x === "number" && typeof y === "number" && typeof z === "number" && !isNaN(x) && !isNaN(y) && !isNaN(z) && z <= 20) {
-        return {
-          worldState: "mine" as const,
-          location: savedState.location || "Underground Cave Mine",
-          depthFeet: Math.max(100, savedState.depthFeet || 100),
-          playerPos: { x, y, z }
-        };
-      }
-    }
-
-    const isSavedAsSurface = savedState.worldState === "surface" ||
-      (savedState.location && (savedState.location.includes("Surface") || savedState.location.includes("Outpost") || savedState.location.includes("Factory")));
-
-    if (isSavedAsSurface && savedState.playerPos) {
-      const { x, y, z } = savedState.playerPos;
-      if (typeof x === "number" && typeof y === "number" && typeof z === "number" && !isNaN(x) && !isNaN(y) && !isNaN(z) && z >= 25) {
-        return {
-          worldState: "surface" as const,
-          location: savedState.location || "Surface Mining Outpost & Original Factory",
-          depthFeet: 0,
-          playerPos: { x, y, z }
-        };
-      }
-    }
-
-    // Default Fallback: Safe Surface Spawn Point
-    return {
-      worldState: "surface" as const,
-      location: "Surface Mining Outpost & Original Factory",
-      depthFeet: 0,
-      playerPos: { ...DEFAULT_SURFACE_SPAWN }
-    };
-  })();
-
-  const [cash, setCash] = useState(savedState ? savedState.cash : 0);
-  const [inventory, setInventory] = useState<Record<string, number>>(savedState?.inventory || {});
-  const [jewelryInventory, setJewelryInventory] = useState<Record<string, number>>(savedState?.jewelryInventory || {});
-  const [backpackCapacity, setBackpackCapacity] = useState(savedState?.backpackCapacity || STARTING_BACKPACK_CAPACITY);
-  const [location, setLocation] = useState(initialSpawnConfig.location);
-  const [depthFeet, setDepthFeet] = useState(initialSpawnConfig.depthFeet);
-  const [remainingCaveGems, setRemainingCaveGems] = useState(savedState?.remainingCaveGems || INITIAL_CAVE_GEMS);
-  const [showFactory, setShowFactory] = useState(initialSpawnConfig.worldState === "surface");
+  const [cash, setCash] = useState(0);
+  const [inventory, setInventory] = useState<Record<string, number>>({});
+  const totalGemsCount = Object.values(inventory).reduce((a, b) => (a as number) + (b as number), 0);
+  const [jewelryInventory, setJewelryInventory] = useState<Record<string, number>>({});
+  const [backpackCapacity, setBackpackCapacity] = useState(STARTING_BACKPACK_CAPACITY);
+  const [location, setLocation] = useState("Surface Mining Outpost");
+  const [depthFeet, setDepthFeet] = useState(0);
+  const [remainingCaveGems, setRemainingCaveGems] = useState(INITIAL_CAVE_GEMS);
+  const [showFactory, setShowFactory] = useState(true);
   const [nearJewelryShop, setNearJewelryShop] = useState(false);
   const [factoryNotification, setFactoryNotification] = useState<string | null>(null);
 
+  // Drill & Mining Upgrades State (+22% Boosted Drill Power = 24.4 DPS!)
+  const [upgrades, setUpgrades] = useState({
+    power: 24.4,
+    speed: 1.35,
+    backpack: STARTING_BACKPACK_CAPACITY,
+    elevatorSpeed: 350.0, 
+    headlampOptics: 1.0, 
+    scanner: false,
+    drillBitTier: 0 
+  });
+
   // Management, Workers, Encyclopedia & Achievements State
+  const [isPaused, setIsPaused] = useState(false);
   const [isOfficeOpen, setIsOfficeOpen] = useState(false);
   const [isEncyclopediaOpen, setIsEncyclopediaOpen] = useState(false);
-  const [isTutorialOpen, setIsTutorialOpen] = useState(!savedState || !savedState.hasCompletedTutorial);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isStatisticsOpen, setIsStatisticsOpen] = useState(false);
-  const [isLoadingScreen, setIsLoadingScreen] = useState(true);
+  const [isLoadingScreen, setIsLoadingScreen] = useState(false);
   const [isEngineReady, setIsEngineReady] = useState(false);
   const [totalMinedCount, setTotalMinedCount] = useState(0);
   const [featuredDiscoveredGem, setFeaturedDiscoveredGem] = useState<GemstoneEntry | null>(null);
@@ -139,6 +109,8 @@ export default function DeepMiningApp() {
 
   // Clear Screen Toggle
   const [clearScreenMode, setClearScreenMode] = useState(false);
+  const [minimapPlayerPos, setMinimapPlayerPos] = useState({ x: 0, z: 104 });
+  const [minimapPlayerYaw, setMinimapPlayerYaw] = useState(0);
 
   // Graphics Quality & 3rd-Person Camera Controls
   const [graphicsQuality, setGraphicsQuality] = useState<"ultra" | "high" | "balanced" | "performance">(() => {
@@ -162,14 +134,31 @@ export default function DeepMiningApp() {
     return 1.0;
   });
 
+  const playerYawRef = useRef(0);
   const cameraYawRef = useRef(0);
   const cameraPitchRef = useRef(0.28);
   const cameraDistanceRef = useRef(8.5);
+  const turnButtonsRef = useRef({ left: false, right: false });
   const cameraSensitivityRef = useRef(cameraSensitivity);
   const graphicsQualityRef = useRef(graphicsQuality);
+  const isPausedRef = useRef(isPaused);
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+
   const currentCamLookAtRef = useRef(new THREE.Vector3(0, 1.2, -6));
   const accumulatedWagesRef = useRef(0);
   const lastWageCommitTimeRef = useRef(0);
+  const inventoryRef = useRef<Record<string, number>>(inventory);
+
+  useEffect(() => {
+    inventoryRef.current = inventory;
+  }, [inventory]);
+
+  const totalGemsInBackpackRef = useRef(0);
+  useEffect(() => {
+    totalGemsInBackpackRef.current = Object.values(inventory).reduce((a, b) => (a as number) + (b as number), 0);
+  }, [inventory]);
 
 
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -250,20 +239,81 @@ export default function DeepMiningApp() {
     soundManager.playCashRegister();
   }, []);
 
-  // Drill & Mining Upgrades State (+22% Boosted Drill Power = 24.4 DPS!)
-  const [upgrades, setUpgrades] = useState(savedState?.upgrades || {
-    power: 24.4,
-    speed: 1.35,
-    backpack: STARTING_BACKPACK_CAPACITY,
-    elevatorSpeed: 35.0, // 35 m/s (Faster than Taipei 101's 16.8 m/s!)
-    headlampOptics: 1.0, // 400m Base Range Multiplier
-    scanner: false,
-    drillBitTier: 0 // 0: Steel, 1: Titanium Carbide, 2: Diamond Core
-  });
+  const handleSaveGame = useCallback(() => {
+    saveSystem.save({
+      cash: sharedStateRef.current.get('cash') ?? cash,
+      inventory: inventory,
+      jewelryInventory: jewelryInventory,
+      backpackCapacity: sharedStateRef.current.get('backpackCapacity') ?? backpackCapacity,
+      depthFeet: lastDepthRef.current,
+      location: lastLocationRef.current,
+      remainingCaveGems: remainingCaveGems,
+      upgrades: sharedStateRef.current.get('upgrades') ?? upgrades,
+      hasCompletedTutorial: true,
+      savedAt: new Date().toISOString(),
+      playerPos: playerGroupRef.current ? {
+        x: playerGroupRef.current.position.x,
+        y: playerGroupRef.current.position.y,
+        z: playerGroupRef.current.position.z
+      } : undefined,
+      worldState: elevatorStateRef.current === "mine" ? "mine" : "surface"
+    });
+    soundManager.playCashRegister();
+    setFactoryNotification("💾 Progress Saved Successfully!");
+    setTimeout(() => setFactoryNotification(null), 3000);
+  }, [inventory, jewelryInventory, remainingCaveGems, cash, backpackCapacity, upgrades]);
 
-  const upgradesRef = useRef(upgrades);
+  const handleStartNewGame = useCallback(() => {
+    setIsMainMenuOpen(false);
+    setIsLoadingScreen(true);
+    setGameState("loading");
+    // Initial state setup for new game
+    setCash(0);
+    setInventory({});
+    setJewelryInventory({});
+    setBackpackCapacity(STARTING_BACKPACK_CAPACITY);
+    setUpgrades({
+      power: 24.4,
+      speed: 1.35,
+      backpack: STARTING_BACKPACK_CAPACITY,
+      elevatorSpeed: 350.0,
+      headlampOptics: 1.0,
+      scanner: false,
+      drillBitTier: 0
+    });
+    setRemainingCaveGems(INITIAL_CAVE_GEMS);
+    setLocation("Surface Mining Outpost");
+    setDepthFeet(0);
+  }, []);
+
+  const handleLoadGame = useCallback(() => {
+    const saved = saveSystem.load();
+    if (saved) {
+      setIsMainMenuOpen(false);
+      setIsLoadingScreen(true);
+      setGameState("loading");
+      
+      setCash(saved.cash);
+      setInventory(saved.inventory || {});
+      setJewelryInventory(saved.jewelryInventory || {});
+      setBackpackCapacity(saved.backpackCapacity || STARTING_BACKPACK_CAPACITY);
+      setUpgrades({
+        ...saved.upgrades,
+        headlampOptics: saved.upgrades.headlampOptics ?? 1.0
+      });
+      setRemainingCaveGems(saved.remainingCaveGems || INITIAL_CAVE_GEMS);
+      setLocation("Surface Mining Outpost");
+      setDepthFeet(0);
+    } else {
+      setFactoryNotification("❌ No saved data found. Starting new operations.");
+      setTimeout(() => setFactoryNotification(null), 3000);
+      handleStartNewGame();
+    }
+  }, [handleStartNewGame]);
+
+  const sharedStateRef = useRef(new Map<string, any>());
   useEffect(() => {
-    upgradesRef.current = upgrades;
+    sharedStateRef.current.set('upgrades', upgrades);
   }, [upgrades]);
 
 
@@ -278,8 +328,18 @@ export default function DeepMiningApp() {
 
   // Mutable refs for state guarding in 60fps loop
   const drillControllerRef = useRef(new GemDrillController());
-  const elevatorStateRef = useRef<ElevatorState>(initialSpawnConfig.worldState);
-  const backpackCapRef = useRef(STARTING_BACKPACK_CAPACITY);
+  const elevatorStateRef = useRef<ElevatorState>("surface");
+  const backpackCapRef = useRef<number>(STARTING_BACKPACK_CAPACITY);
+  useEffect(() => {
+    sharedStateRef.current.set('backpackCapacity', backpackCapacity);
+  }, [backpackCapacity]);
+
+  const cashRef = useRef<number>(cash);
+  useEffect(() => {
+    sharedStateRef.current.set('cash', cash);
+    cashRef.current = cash;
+  }, [cash]);
+
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const worldRef = useRef<ReturnType<typeof buildMiningWorld> | null>(null);
   const factoryEngineRef = useRef<ReturnType<typeof createSurfaceFactory> | null>(null);
@@ -290,12 +350,12 @@ export default function DeepMiningApp() {
   const megaCaveSystemRef = useRef<MegaCaveSystem | null>(null);
   const surfaceSystemRef = useRef<SurfaceWorldSystem | null>(null);
   const rollingHazardRef = useRef<RollingHazardSystem | null>(null);
+  const weatherSystemRef = useRef<WeatherSystem | null>(null);
 
 
 
   // Tracking refs for zero-re-render calculations
   const totalMinedRef = useRef(0);
-  const cashRef = useRef(100);
   const lastLocationRef = useRef("Underground Cave Mine");
   const lastDepthRef = useRef(100);
   const lastNearElevatorRef = useRef(false);
@@ -304,14 +364,6 @@ export default function DeepMiningApp() {
   const lastNearJewelryShopRef = useRef(false);
   const lastNearOfficeRef = useRef(false);
   const lastAutoDrillingRef = useRef(false);
-
-  useEffect(() => {
-    backpackCapRef.current = backpackCapacity;
-  }, [backpackCapacity]);
-
-  useEffect(() => {
-    cashRef.current = cash;
-  }, [cash]);
 
   // Hook Achievement Unlock Listener
   useEffect(() => {
@@ -378,6 +430,65 @@ export default function DeepMiningApp() {
     });
   }, [upgrades, backpackCapacity]);
 
+  // Helper functions for guarded state updates (Memoized to prevent unnecessary re-renders)
+  const setLocationGuarded = useCallback((newLoc: string) => {
+    if (lastLocationRef.current !== newLoc) {
+      // eslint-disable-next-line react-hooks/immutability
+      lastLocationRef.current = newLoc;
+      setLocation(newLoc);
+    }
+  }, []);
+
+  const setDepthGuarded = useCallback((newDepth: number) => {
+    if (lastDepthRef.current !== newDepth) {
+      // eslint-disable-next-line react-hooks/immutability
+      lastDepthRef.current = newDepth;
+      setDepthFeet(newDepth);
+    }
+  }, []);
+
+  const setNearElevatorGuarded = useCallback((val: boolean) => {
+    if (lastNearElevatorRef.current !== val) {
+      lastNearElevatorRef.current = val;
+      setNearElevator(val);
+    }
+  }, []);
+
+  const setNearTraderGuarded = useCallback((val: boolean) => {
+    if (lastNearTraderRef.current !== val) {
+      lastNearTraderRef.current = val;
+      setNearTrader(val);
+    }
+  }, []);
+
+  const setNearFactoryGuarded = useCallback((val: boolean) => {
+    if (lastNearFactoryRef.current !== val) {
+      lastNearFactoryRef.current = val;
+      setNearFactory(val);
+    }
+  }, []);
+
+  const setNearJewelryShopGuarded = useCallback((val: boolean) => {
+    if (lastNearJewelryShopRef.current !== val) {
+      lastNearJewelryShopRef.current = val;
+      setNearJewelryShop(val);
+    }
+  }, []);
+
+  const setIsAutoDrillingGuarded = useCallback((val: boolean) => {
+    if (lastAutoDrillingRef.current !== val) {
+      lastAutoDrillingRef.current = val;
+      setIsAutoDrilling(val);
+    }
+  }, []);
+
+  const setNearOfficeGuarded = useCallback((val: boolean) => {
+    if (lastNearOfficeRef.current !== val) {
+      lastNearOfficeRef.current = val;
+      setNearOffice(val);
+    }
+  }, []);
+
   // Sell All Gems
   const handleSellGems = useCallback(() => {
     setInventory(currentInventory => {
@@ -436,7 +547,7 @@ export default function DeepMiningApp() {
 
     // 2. Also check inventory state if deposits were already empty
     if (gemsToTransfer.length === 0) {
-      for (const [gemId, count] of Object.entries(inventory)) {
+      for (const [gemId, count] of Object.entries(inventoryRef.current)) {
         if (count > 0) {
           const gemConfig = GAME_GEMS.find(g => g.id === gemId) ?? GAME_GEMS[0];
           for (let i = 0; i < count; i++) {
@@ -461,10 +572,11 @@ export default function DeepMiningApp() {
       setFactoryNotification(`✨ Backpack emptied! Deposited ${depositedCount} gems onto factory conveyor (Backpack: 0 / ${backpackCapacity}). Processing through Driller, Crusher, Washer, Compactor & Gem Jam.`);
       setTimeout(() => setFactoryNotification(null), 5000);
     }
-  }, [inventory, backpackCapacity]);
+  }, [backpackCapacity]);
 
   // Primary Three.js Mounting & Physics Loop
   useEffect(() => {
+    if (gameState === "menu") return;
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -570,38 +682,28 @@ export default function DeepMiningApp() {
     const surfaceSystem = createSurfaceWorldSystem(scene);
     surfaceSystemRef.current = surfaceSystem;
 
-    // Synchronize initial elevator doors & position matching world state & continuous music
-    if (initialSpawnConfig.worldState === "surface") {
-      world.elevatorGroup.position.z = 100;
-      world.elevatorDoors[0].position.x = -2.1;
-      world.elevatorDoors[1].position.x = 2.1;
-      soundManager.startMusic("surface");
-    } else {
-      world.elevatorGroup.position.z = 2;
-      world.elevatorDoors[0].position.x = -2.1;
-      world.elevatorDoors[1].position.x = 2.1;
-      soundManager.startMusic("cave");
-    }
+    // Force surface spawn always
+    world.elevatorGroup.position.z = 100;
+    world.elevatorDoors[0].position.x = -2.1;
+    world.elevatorDoors[1].position.x = 2.1;
+    soundManager.startMusic("surface");
 
-    // Determine exact grounded Y elevation AFTER surface & cave collision systems are initialized
-    const groundY = initialSpawnConfig.worldState === "mine"
-      ? megaCaveSystem.getGroundHeight(new THREE.Vector3(initialSpawnConfig.playerPos.x, 0, initialSpawnConfig.playerPos.z))
-      : surfaceSystem.getGroundHeight(new THREE.Vector3(initialSpawnConfig.playerPos.x, 0, initialSpawnConfig.playerPos.z));
-
-    const finalSpawnX = initialSpawnConfig.playerPos.x;
-    const finalSpawnZ = initialSpawnConfig.playerPos.z;
-    const finalSpawnY = Math.max(groundY, typeof initialSpawnConfig.playerPos.y === "number" && !isNaN(initialSpawnConfig.playerPos.y) ? initialSpawnConfig.playerPos.y : groundY);
+    const initialSpawnX = DEFAULT_SURFACE_SPAWN.x;
+    const initialSpawnZ = DEFAULT_SURFACE_SPAWN.z;
+    const groundY = surfaceSystem.getGroundHeight(new THREE.Vector3(initialSpawnX, 0, initialSpawnZ));
+    const finalSpawnY = groundY;
 
     // Build Player Character Rig
     const playerGroup = new THREE.Group();
-    playerGroup.position.set(finalSpawnX, finalSpawnY, finalSpawnZ);
+    playerGroup.position.set(initialSpawnX, finalSpawnY, initialSpawnZ);
     playerGroup.rotation.y = 0; // Proper starting orientation
     scene.add(playerGroup);
-    playerGroupRef.current = playerGroup;
+    const pRef = playerGroupRef as any;
+    pRef.current = playerGroup;
 
     // Focus camera lookAt target directly on initial player spawn point
-    currentCamLookAtRef.current.set(finalSpawnX, finalSpawnY + 1.25, finalSpawnZ);
-    camera.position.set(finalSpawnX, finalSpawnY + 4.5, finalSpawnZ + 8.5);
+    currentCamLookAtRef.current.set(initialSpawnX, finalSpawnY + 1.25, initialSpawnZ);
+    camera.position.set(initialSpawnX, finalSpawnY + 4.5, initialSpawnZ + 8.5);
     camera.lookAt(currentCamLookAtRef.current);
 
     // Player Body Parts
@@ -703,7 +805,7 @@ export default function DeepMiningApp() {
         const boostedValue = Math.round(value * gemMult);
         setCash(prev => {
           const next = prev + boostedValue;
-          cashRef.current = next;
+          sharedStateRef.current.set('cash', next);
           return next;
         });
         managementSystem.recordRevenue(boostedValue);
@@ -730,6 +832,7 @@ export default function DeepMiningApp() {
 
     const rollingHazardSystem = new RollingHazardSystem(scene);
     rollingHazardRef.current = rollingHazardSystem;
+    weatherSystemRef.current = createWeatherSystem(scene);
 
 
     // Wire Gem Collection Discovery hook to all ore deposits for Gem Encyclopedia & Achievements
@@ -745,84 +848,19 @@ export default function DeepMiningApp() {
       };
     });
 
-    // Joystick Touch Control Setup
     let joyX = 0;
     let joyY = 0;
-    let joyActive = false;
 
-    const joystickContainer = document.createElement("div");
-    joystickContainer.style.cssText =
-      "position:absolute;bottom:32px;left:32px;width:130px;height:130px;border-radius:50%;background:radial-gradient(circle, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.9) 70%, rgba(2,6,23,0.95) 100%);border:3px solid rgba(148,163,184,0.4);touch-action:none;z-index:50;box-shadow:inset 0 6px 12px rgba(0,0,0,0.8), 0 10px 25px rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;";
-    
-    // Outer metallic textured thumbstick ring (Xbox style)
-    const thumbstickBase = document.createElement("div");
-    thumbstickBase.style.cssText =
-      "position:absolute;width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg, #334155 0%, #0f172a 100%);box-shadow:inset 0 4px 8px rgba(0,0,0,0.9), 0 2px 4px rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;";
-    joystickContainer.appendChild(thumbstickBase);
-
-    // Convex textured rubber thumbgrip cap (Xbox style concave/convex grip ring)
-    const joystickKnob = document.createElement("div");
-    joystickKnob.style.cssText =
-      "position:absolute;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle, #475569 0%, #1e293b 65%, #0f172a 100%);box-shadow:0 6px 12px rgba(0,0,0,0.7), inset 0 2px 3px rgba(255,255,255,0.25), inset 0 -4px 6px rgba(0,0,0,0.8);border:2px solid rgba(100,116,139,0.6);transition:transform 0.05s ease-out;";
-    
-    // Grippy outer ridges (Xbox thumbstick concentric dot pattern simulation)
-    for (let r = 0; r < 2; r++) {
-      const gripRing = document.createElement("div");
-      gripRing.style.cssText = `position:absolute;width:${50 - r * 12}px;height:${50 - r * 12}px;border-radius:50%;border:1px dashed rgba(148,163,184,0.3);pointer-events:none;`;
-      joystickKnob.appendChild(gripRing);
-    }
-
-    thumbstickBase.appendChild(joystickKnob);
-    mount.appendChild(joystickContainer);
-
-    const teleportSurfaceBtn = document.createElement("button");
-    teleportSurfaceBtn.innerHTML = "🚀 Surface";
-    teleportSurfaceBtn.style.cssText =
-      "position:absolute;bottom:32px;left:175px;padding:12px 16px;border-radius:14px;background:linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);color:#ffffff;font-size:12px;font-weight:bold;border:1px solid rgba(56,189,248,0.6);box-shadow:0 6px 16px rgba(0,0,0,0.6);cursor:pointer;z-index:50;transition:transform 0.1s ease;";
-    teleportSurfaceBtn.onclick = () => {
-      elevatorStateRef.current = "surface";
-      setLocationGuarded("Surface Mining Outpost");
-      setShowFactory(true);
-      const targetPos = new THREE.Vector3(0, 0, 100);
-      const groundY = surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0;
-      playerGroup.position.set(0, groundY, 100);
-      if (worldRef.current) worldRef.current.elevatorGroup.position.z = 100;
-      soundManager.startMusic("surface");
-      soundManager.playCashRegister();
-    };
-    mount.appendChild(teleportSurfaceBtn);
-
-
-
-    const handlePointerMove = (e: PointerEvent) => {
-      if (!joyActive) return;
-      const rect = joystickContainer.getBoundingClientRect();
-      const dx = e.clientX - (rect.left + rect.width / 2);
-      const dy = e.clientY - (rect.top + rect.height / 2);
-      const dist = Math.min(42, Math.hypot(dx, dy));
-      const angle = Math.atan2(dy, dx);
-      joyX = (Math.cos(angle) * dist) / 42;
-      joyY = (Math.sin(angle) * dist) / 42;
-      joystickKnob.style.transform = `translate(${joyX * 42}px, ${joyY * 42}px)`;
+    // Use a ref for joy inputs to access in the game loop without re-renders
+    const joyInputRef = { current: { x: 0, y: 0 } };
+    (window as any).setJoyInput = (x: number, y: number) => {
+      joyInputRef.current.x = x;
+      joyInputRef.current.y = y;
     };
 
-    const handlePointerDown = (e: PointerEvent) => {
-      joyActive = true;
-      joystickContainer.setPointerCapture(e.pointerId);
-      handlePointerMove(e);
-    };
 
-    const handlePointerUp = () => {
-      joyActive = false;
-      joyX = 0;
-      joyY = 0;
-      joystickKnob.style.transform = "translate(0px, 0px)";
-    };
 
-    joystickContainer.addEventListener("pointerdown", handlePointerDown);
-    joystickContainer.addEventListener("pointermove", handlePointerMove);
-    joystickContainer.addEventListener("pointerup", handlePointerUp);
-    joystickContainer.addEventListener("pointercancel", handlePointerUp);
+
 
     // 3rd-Person Orbit Follow Camera Drag & Touch Setup
     let isCameraDragging = false;
@@ -832,15 +870,8 @@ export default function DeepMiningApp() {
     let lastPinchDist = 0;
 
     const handleCanvasPointerDown = (e: PointerEvent) => {
-      const joyRect = joystickContainer.getBoundingClientRect();
-      if (
-        e.clientX >= joyRect.left - 15 &&
-        e.clientX <= joyRect.right + 15 &&
-        e.clientY >= joyRect.top - 15 &&
-        e.clientY <= joyRect.bottom + 15
-      ) {
-        return;
-      }
+      // If the target is not the canvas, we shouldn't start a camera drag
+      if (e.target !== renderer.domElement) return;
 
       isCameraDragging = true;
       activeCamPointerId = e.pointerId;
@@ -857,11 +888,14 @@ export default function DeepMiningApp() {
       lastCamPointerY = e.clientY;
 
       const sens = cameraSensitivityRef.current;
-      cameraYawRef.current -= dx * 0.0055 * sens;
+      // Horizontal swipe rotates character heading smoothly without continuous spinning
+      playerYawRef.current -= dx * 0.0035 * sens;
+
+      // Vertical pitch control via drag
       cameraPitchRef.current = THREE.MathUtils.clamp(
-        cameraPitchRef.current + dy * 0.0045 * sens,
-        -0.35,
-        0.95
+        cameraPitchRef.current + dy * 0.003 * sens,
+        -0.2,
+        0.85
       );
     };
 
@@ -875,8 +909,8 @@ export default function DeepMiningApp() {
     const handleWheel = (e: WheelEvent) => {
       cameraDistanceRef.current = THREE.MathUtils.clamp(
         cameraDistanceRef.current + (e.deltaY > 0 ? 0.75 : -0.75),
-        3.8,
-        18.0
+        4.0,
+        16.0
       );
     };
 
@@ -889,8 +923,8 @@ export default function DeepMiningApp() {
           const diff = dist - lastPinchDist;
           cameraDistanceRef.current = THREE.MathUtils.clamp(
             cameraDistanceRef.current - diff * 0.04,
-            3.8,
-            18.0
+            4.0,
+            16.0
           );
         }
         lastPinchDist = dist;
@@ -923,7 +957,7 @@ export default function DeepMiningApp() {
         handleToggleHeadlamp();
       }
       if (e.key.toLowerCase() === "q") {
-        cameraYawRef.current += 0.25;
+        playerYawRef.current += 0.35;
       }
       if (e.key.toLowerCase() === "e") {
         const elevatorZ = elevatorStateRef.current === "surface" ? 100 : 2;
@@ -938,8 +972,8 @@ export default function DeepMiningApp() {
             triggerElevator("traveling-down");
           }
         } else {
-          // If not interacting, rotate camera right
-          cameraYawRef.current -= 0.25;
+          // If not interacting, rotate character right
+          playerYawRef.current -= 0.35;
         }
       }
     };
@@ -948,8 +982,15 @@ export default function DeepMiningApp() {
       keysRef.current[e.key.toLowerCase()] = false;
     };
 
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsPaused(prev => !prev);
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("keydown", handleEscape);
 
     // Elevator Travel Function (35.0 m/s Speed)
     let elevatorProgress = 0;
@@ -968,6 +1009,8 @@ export default function DeepMiningApp() {
       // Lock player inside cabin platform safely
       playerGroup.position.set(world.elevatorGroup.position.x, 0.15, world.elevatorGroup.position.z);
       playerGroup.rotation.y = 0;
+      playerYawRef.current = 0;
+      cameraYawRef.current = 0;
     }
 
     // Function to render 3D Backpack Gem Tower with pooled meshes and shared materials
@@ -1000,49 +1043,6 @@ export default function DeepMiningApp() {
       }
     }
 
-    // Helper functions for guarded state updates
-    function setLocationGuarded(newLoc: string) {
-      if (lastLocationRef.current !== newLoc) {
-        lastLocationRef.current = newLoc;
-        setLocation(newLoc);
-      }
-    }
-
-    function setDepthGuarded(newDepth: number) {
-      if (lastDepthRef.current !== newDepth) {
-        lastDepthRef.current = newDepth;
-        setDepthFeet(newDepth);
-      }
-    }
-
-    function setNearElevatorGuarded(val: boolean) {
-      if (lastNearElevatorRef.current !== val) {
-        lastNearElevatorRef.current = val;
-        setNearElevator(val);
-      }
-    }
-
-    function setNearTraderGuarded(val: boolean) {
-      if (lastNearTraderRef.current !== val) {
-        lastNearTraderRef.current = val;
-        setNearTrader(val);
-      }
-    }
-
-    function setNearFactoryGuarded(val: boolean) {
-      if (lastNearFactoryRef.current !== val) {
-        lastNearFactoryRef.current = val;
-        setNearFactory(val);
-      }
-    }
-
-    function setIsAutoDrillingGuarded(val: boolean) {
-      if (lastAutoDrillingRef.current !== val) {
-        lastAutoDrillingRef.current = val;
-        setIsAutoDrilling(val);
-      }
-    }
-
     // Main Game Loop
     let previousTime = performance.now();
     let animationFrameId = 0;
@@ -1051,18 +1051,26 @@ export default function DeepMiningApp() {
     let lastInventoryUpdateTime = 0;
     let lastSimulationTime = 0;
 
+    let frameCounter = 0;
     const animate = (now: number) => {
+      animationFrameId = requestAnimationFrame(animate);
+      
       const dt = Math.min((now - previousTime) / 1000, 0.05);
       previousTime = now;
-
+      
+      if (isPausedRef.current) return;
+      
       const keys = keysRef.current;
       const state = elevatorStateRef.current;
+      
+      frameCounter++;
 
       // --------------------------------------------------
       // 1. HYPER-SPEED ELEVATOR LOCOMOTION
       // --------------------------------------------------
       if (state === "traveling-up" || state === "traveling-down") {
-        const currentSpeed = upgradesRef.current.elevatorSpeed;
+        const currentUpgrades = sharedStateRef.current.get('upgrades') || upgrades;
+        const currentSpeed = currentUpgrades.elevatorSpeed;
         elevatorProgress += (currentSpeed * dt) / ELEVATOR_TRAVEL_DISTANCE;
 
         soundManager.playHyperElevatorSound(true, elevatorProgress);
@@ -1107,49 +1115,77 @@ export default function DeepMiningApp() {
       }
 
       // --------------------------------------------------
-      // 2. CAMERA-RELATIVE JOYSTICK & KEYBOARD LOCOMOTION
+      // 2. CHARACTER TURNING & MOVEMENT
       // --------------------------------------------------
-      const camYaw = cameraYawRef.current;
-      const fwdX = -Math.sin(camYaw);
-      const fwdZ = -Math.cos(camYaw);
-      const rightX = Math.cos(camYaw);
-      const rightZ = -Math.sin(camYaw);
+      const turnSpeed = 2.6 * cameraSensitivityRef.current;
 
-      let inputX = joyX;
-      let inputZ = joyY;
+      // Keyboard turning (A/D or Left/Right Arrow) or mobile on-screen turn buttons
+      if (keys["a"] || keys["arrowleft"] || turnButtonsRef.current.left) {
+        playerYawRef.current += turnSpeed * dt;
+      }
+      if (keys["d"] || keys["arrowright"] || turnButtonsRef.current.right) {
+        playerYawRef.current -= turnSpeed * dt;
+      }
 
-      if (keys["w"] || keys["arrowup"]) inputZ -= 1;
-      if (keys["s"] || keys["arrowdown"]) inputZ += 1;
-      if (keys["a"] || keys["arrowleft"]) inputX -= 1;
-      if (keys["d"] || keys["arrowright"]) inputX += 1;
+      // Normalize playerYawRef.current to [-PI, PI] to prevent floating point drift
+      while (playerYawRef.current > Math.PI) playerYawRef.current -= Math.PI * 2;
+      while (playerYawRef.current < -Math.PI) playerYawRef.current += Math.PI * 2;
 
-      const rawInputLen = Math.hypot(inputX, inputZ);
-      const isMoving = rawInputLen > 0.08 && (state === "mine" || state === "surface");
+      const playerYaw = playerYawRef.current;
+      playerGroup.rotation.y = playerYaw;
+
+      // Character local directions in world space (Forward is -Z when playerYaw is 0)
+      const fwdX = -Math.sin(playerYaw);
+      const fwdZ = -Math.cos(playerYaw);
+      const rightX = Math.cos(playerYaw);
+      const rightZ = -Math.sin(playerYaw);
+
+      // Keyboard forward/backward
+      let inputForward = 0;
+      if (keys["w"] || keys["arrowup"]) inputForward += 1;
+      if (keys["s"] || keys["arrowdown"]) inputForward -= 1;
+
+      // Joystick inputs (Deadzone filtered)
+      const jInput = joyInputRef.current;
+      const joyDeadzone = 0.15;
+      let jFwd = 0;
+      let jStrafe = 0;
+
+      if (Math.abs(jInput.y) > joyDeadzone) {
+        // jInput.y is negative for forward (up), positive for backward (down)
+        const sign = jInput.y < 0 ? 1 : -1;
+        const mag = (Math.abs(jInput.y) - joyDeadzone) / (1 - joyDeadzone);
+        jFwd = sign * Math.min(1, mag);
+      }
+
+      if (Math.abs(jInput.x) > joyDeadzone) {
+        // jInput.x is negative for left, positive for right
+        const sign = jInput.x > 0 ? 1 : -1;
+        const mag = (Math.abs(jInput.x) - joyDeadzone) / (1 - joyDeadzone);
+        jStrafe = sign * Math.min(1, mag);
+      }
+
+      const totalFwd = THREE.MathUtils.clamp(inputForward + jFwd, -1, 1);
+      const totalStrafe = THREE.MathUtils.clamp(jStrafe, -1, 1);
+
+      const isMoving = (Math.abs(totalFwd) > 0.05 || Math.abs(totalStrafe) > 0.05) && (state === "mine" || state === "surface");
 
       if (isMoving) {
-        const clampedInputLen = Math.min(1, rawInputLen);
-        const normInputX = inputX / rawInputLen;
-        const normInputZ = inputZ / rawInputLen;
+        // Forward speed 6.4 m/s, backward speed 4.8 m/s, strafe speed 5.0 m/s
+        const fwdSpeed = totalFwd >= 0 ? 6.4 : 4.8;
+        const strafeSpeed = 5.0;
 
-        // Camera-relative world motion direction
-        const worldDirX = rightX * normInputX + fwdX * (-normInputZ);
-        const worldDirZ = rightZ * normInputX + fwdZ * (-normInputZ);
+        const moveX = (fwdX * totalFwd * fwdSpeed + rightX * totalStrafe * strafeSpeed) * dt;
+        const moveZ = (fwdZ * totalFwd * fwdSpeed + rightZ * totalStrafe * strafeSpeed) * dt;
 
-        const moveSpeed = 5.8;
-        const targetX = playerGroup.position.x + worldDirX * dt * moveSpeed * clampedInputLen;
-        const targetZ = playerGroup.position.z + worldDirZ * dt * moveSpeed * clampedInputLen;
-        
-        // Allow seamless exploration without invisible boundary blocks or walls
-        playerGroup.position.x = targetX;
-        playerGroup.position.z = targetZ;
+        playerGroup.position.x += moveX;
+        playerGroup.position.z += moveZ;
+      }
 
-        // Shortest-path player orientation facing the exact direction of travel using Quaternions
-        const targetQuaternion = new THREE.Quaternion();
-        const direction = new THREE.Vector3(worldDirX, 0, worldDirZ).normalize();
-        const targetRotation = new THREE.Euler(0, Math.atan2(direction.x, direction.z), 0);
-        targetQuaternion.setFromEuler(targetRotation);
-        
-        playerGroup.quaternion.slerp(targetQuaternion, Math.min(1, 10 * dt));
+      // Throttled Minimap Update (10fps is enough)
+      if (frameCounter % 6 === 0) {
+        setMinimapPlayerPos({ x: playerGroup.position.x, z: playerGroup.position.z });
+        setMinimapPlayerYaw(playerYaw);
       }
 
       // Update World Chunk Streaming based on player position
@@ -1308,7 +1344,7 @@ export default function DeepMiningApp() {
             const pickedUp = deposit.collectNear(
               playerGroup.position,
               2.8,
-              backpackCapRef.current,
+              sharedStateRef.current.get('backpackCapacity') ?? backpackCapacity,
               currentTotalGemsInBackpack
             );
 
@@ -1358,47 +1394,56 @@ export default function DeepMiningApp() {
       updateBackpackGemTower(currentTotalGemsInBackpack);
 
       // --------------------------------------------------
-      // 5. IMPROVED 3RD-PERSON ORBIT FOLLOW CAMERA
+      // 5. STABLE THIRD-PERSON FOLLOW CAMERA
       // --------------------------------------------------
-      // Calculate desired camera position based on player, yaw, pitch, and distance
-      const pitch = THREE.MathUtils.clamp(cameraPitchRef.current, -0.35, 0.95);
-      const dist = THREE.MathUtils.clamp(cameraDistanceRef.current, 3.8, 18.0);
-      
+      // Calculate shortest angular difference between player facing and camera yaw
+      let angleDiff = playerYaw - cameraYawRef.current;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+      // Smooth follow with exponential decay (no snapping, no overshoot, smooth settling)
+      const followRate = 8.5;
+      cameraYawRef.current += angleDiff * (1.0 - Math.exp(-followRate * dt));
+      while (cameraYawRef.current > Math.PI) cameraYawRef.current -= Math.PI * 2;
+      while (cameraYawRef.current < -Math.PI) cameraYawRef.current += Math.PI * 2;
+
+      const camYaw = cameraYawRef.current;
+      const pitch = THREE.MathUtils.clamp(cameraPitchRef.current, -0.2, 0.85);
+      const dist = THREE.MathUtils.clamp(cameraDistanceRef.current, 4.0, 16.0);
+
       const horizDist = dist * Math.cos(pitch);
       const vertDist = dist * Math.sin(pitch);
 
-      const offX = horizDist * Math.sin(camYaw);
-      const offZ = horizDist * Math.cos(camYaw);
-      const offY = vertDist + 1.25; // Base height above player center
-
-      // Target camera position
-      const targetCamPos = new THREE.Vector3(
-        playerGroup.position.x + offX,
-        playerGroup.position.y + offY,
-        playerGroup.position.z + offZ
+      // Camera target position behind the player (Zero GC allocation)
+      _tempTargetPos.set(
+        playerGroup.position.x + horizDist * Math.sin(camYaw),
+        playerGroup.position.y + vertDist + 1.25,
+        playerGroup.position.z + horizDist * Math.cos(camYaw)
       );
 
-      // Smoothly update camera position using damp
-      camera.position.x = THREE.MathUtils.damp(camera.position.x, targetCamPos.x, 8, dt);
-      camera.position.y = THREE.MathUtils.damp(camera.position.y, targetCamPos.y, 8, dt);
-      camera.position.z = THREE.MathUtils.damp(camera.position.z, targetCamPos.z, 8, dt);
+      // Smoothly damp camera position toward target
+      camera.position.x = THREE.MathUtils.damp(camera.position.x, _tempTargetPos.x, 14, dt);
+      camera.position.y = THREE.MathUtils.damp(camera.position.y, _tempTargetPos.y, 14, dt);
+      camera.position.z = THREE.MathUtils.damp(camera.position.z, _tempTargetPos.z, 14, dt);
 
-      // Target lookAt point
-      const lookAtPos = new THREE.Vector3(
+      // Target lookAt point centered on player (Zero GC allocation)
+      _lookAheadPos.set(
         playerGroup.position.x,
         playerGroup.position.y + 1.25,
         playerGroup.position.z
       );
 
-      // Smoothly update lookAt point
-      currentCamLookAtRef.current.lerp(lookAtPos, 15 * dt);
+      currentCamLookAtRef.current.x = THREE.MathUtils.damp(currentCamLookAtRef.current.x, _lookAheadPos.x, 16, dt);
+      currentCamLookAtRef.current.y = THREE.MathUtils.damp(currentCamLookAtRef.current.y, _lookAheadPos.y, 16, dt);
+      currentCamLookAtRef.current.z = THREE.MathUtils.damp(currentCamLookAtRef.current.z, _lookAheadPos.z, 16, dt);
       camera.lookAt(currentCamLookAtRef.current);
       
       playerLight.position.set(playerGroup.position.x, playerGroup.position.y + 4.5, playerGroup.position.z);
 
       // Update 400-Meter Dual Spotlight Headlamp parameters
       const lampMult = headlampOnRef.current ? headlampPowerRef.current : 0;
-      const opticsMult = upgradesRef.current.headlampOptics || 1.0;
+      const currentUpgrades = sharedStateRef.current.get('upgrades') || upgrades;
+      const opticsMult = currentUpgrades.headlampOptics || 1.0;
 
       coreSpotlight.distance = 400 * opticsMult;
       coreSpotlight.intensity = 120 * lampMult * opticsMult;
@@ -1501,7 +1546,7 @@ export default function DeepMiningApp() {
           (reward) => {
             setCash(prev => {
               const next = prev + reward;
-              cashRef.current = next;
+              sharedStateRef.current.set('cash', next);
               return next;
             });
             soundManager.playCashRegister();
@@ -1509,11 +1554,13 @@ export default function DeepMiningApp() {
         );
       }
 
-      world.updateWorld(dt);
-      managementOffice.update(dt);
-      
-      // Update global rock debris fragments
-      GemOreDeposit.updateGlobalDebris(dt);
+      // 5. WORLD & SIMULATION UPDATES (Throttled to 30fps)
+      if (frameCounter % 2 === 0) {
+        world.updateWorld(dt * 2);
+        weatherSystemRef.current?.update(dt * 2);
+        managementOffice.update(dt * 2);
+        GemOreDeposit.updateGlobalDebris(dt * 2);
+      }
 
 
       // --------------------------------------------------
@@ -1598,30 +1645,49 @@ export default function DeepMiningApp() {
 
       const machineMult = managementSystem.getMachineSpeedMultiplier();
       
+      // Auto-Deposit Gems near Factory
       const distToFactory = playerGroup.position.distanceTo(_factoryPos);
       const distToJewelry = playerGroup.position.distanceTo(_jewelryPos);
       
       const factoryVisible = state === "surface" && distToFactory < 120;
       const jewelryVisible = state === "surface" && distToJewelry < 120;
-      
+
+      const currentBackpackCap = (sharedStateRef.current.get('upgrades')?.backpack ?? backpackCapacity) + managementSystem.getBackpackCapacityBonus();
+      const currentGemsInBackpack = totalGemsInBackpackRef.current;
+
+      if (distToFactory < 18 && currentGemsInBackpack > 0 && (now - lastFactoryUnloadTime > 800)) {
+        lastFactoryUnloadTime = now;
+        handleDepositBackpackToFactory();
+      }
+
       factoryEngine.setVisible(factoryVisible);
-      factoryEngine.update(dt * machineMult);
-      
       if (jewelryFactoryRef.current) {
         jewelryFactoryRef.current.setVisible(jewelryVisible);
-        jewelryFactoryRef.current.update(dt * machineMult);
+      }
+      
+      // Factory & Worker logic (Throttled to 30fps)
+      if (frameCounter % 2 === 0) {
+        const machineMult = managementSystem.getMachineSpeedMultiplier() * 12.0; // SUPER-EXtreme factory efficiency boost
+        factoryEngine.update(dt * 2 * machineMult);
+        if (jewelryFactoryRef.current) {
+          jewelryFactoryRef.current.update(dt * 2 * machineMult);
+        }
+        workerRenderer.update(dt * 2, dynamicPositions, playerGroup.position);
       }
       
       managementOffice.group.visible = state === "surface" && playerGroup.position.distanceTo(managementOffice.group.position) < 150;
-
-      workerRenderer.update(dt, dynamicPositions, playerGroup.position);
       
-      renderer.render(scene, camera);
-      animationFrameId = requestAnimationFrame(animate);
+      try {
+        renderer.render(scene, camera);
+        if (!isEngineReady) {
+          setIsEngineReady(true);
+        }
+      } catch (err) {
+        console.error("Error in animation loop:", err);
+      }
     };
 
     animationFrameId = requestAnimationFrame(animate);
-    setIsEngineReady(true);
 
     // Resize Handler
     const handleResize = () => {
@@ -1632,30 +1698,13 @@ export default function DeepMiningApp() {
     };
 
     window.addEventListener("resize", handleResize);
-
-    // Cleanup
     return () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
-      joystickContainer.removeEventListener("pointerdown", handlePointerDown);
-      joystickContainer.removeEventListener("pointermove", handlePointerMove);
-      joystickContainer.removeEventListener("pointerup", handlePointerUp);
-      joystickContainer.removeEventListener("pointercancel", handlePointerUp);
-
-      renderer.domElement.removeEventListener("pointerdown", handleCanvasPointerDown);
-      renderer.domElement.removeEventListener("pointermove", handleCanvasPointerMove);
-      renderer.domElement.removeEventListener("pointerup", handleCanvasPointerUp);
-      renderer.domElement.removeEventListener("pointercancel", handleCanvasPointerUp);
-      mount.removeEventListener("wheel", handleWheel);
-      mount.removeEventListener("touchmove", handleTouchMove);
-      mount.removeEventListener("touchend", handleTouchEnd);
-      renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
-
-      rendererRef.current = null;
-      sceneRef.current = null;
-
+      window.removeEventListener("keydown", handleEscape);
+      
       renderer.dispose();
       world.disposeWorld();
       megaCaveSystem.dispose();
@@ -1672,24 +1721,22 @@ export default function DeepMiningApp() {
       }
 
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-      if (mount.contains(joystickContainer)) mount.removeChild(joystickContainer);
-      if (mount.contains(teleportSurfaceBtn)) mount.removeChild(teleportSurfaceBtn);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array to ensure the game loop starts once and stays alive
+  }, [gameState]);
 
   // Periodic Auto-Save
   useEffect(() => {
     const interval = setInterval(() => {
       saveSystem.save({
-        cash,
-        inventory,
-        jewelryInventory,
-        backpackCapacity,
-        depthFeet,
-        location,
-        remainingCaveGems,
-        upgrades,
+        cash: sharedStateRef.current.get('cash') ?? cash,
+        inventory: inventory,
+        jewelryInventory: jewelryInventory,
+        backpackCapacity: sharedStateRef.current.get('backpackCapacity') ?? backpackCapacity,
+        depthFeet: lastDepthRef.current,
+        location: lastLocationRef.current,
+        remainingCaveGems: remainingCaveGems,
+        upgrades: sharedStateRef.current.get('upgrades') ?? upgrades,
         hasCompletedTutorial: true,
         savedAt: new Date().toISOString(),
         playerPos: playerGroupRef.current ? {
@@ -1701,7 +1748,8 @@ export default function DeepMiningApp() {
       });
     }, 12000);
     return () => clearInterval(interval);
-  }, [cash, inventory, jewelryInventory, backpackCapacity, depthFeet, location, remainingCaveGems, upgrades]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventory, jewelryInventory, remainingCaveGems]);
 
   const handleTeleportToElevator = useCallback(() => {
     if (!playerGroupRef.current) return;
@@ -1715,6 +1763,8 @@ export default function DeepMiningApp() {
       const groundY = surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0;
       playerGroupRef.current.position.set(0, groundY, 104);
     }
+    playerYawRef.current = 0;
+    cameraYawRef.current = 0;
     soundManager.playCashRegister();
   }, []);
 
@@ -1724,11 +1774,11 @@ export default function DeepMiningApp() {
       if (baseEarned > 0) {
         const priceMult = managementSystem.getJewelryPriceMultiplier();
         const boostedEarned = Math.round(baseEarned * priceMult);
-        setCash(prev => {
-          const next = prev + boostedEarned;
-          cashRef.current = next;
-          return next;
-        });
+          setCash(prev => {
+            const next = prev + boostedEarned;
+            sharedStateRef.current.set('cash', next);
+            return next;
+          });
         managementSystem.recordRevenue(boostedEarned);
         soundManager.playCashRegister();
         setJewelryInventory(jewelryFactoryRef.current.getJewelryInventory());
@@ -1736,73 +1786,162 @@ export default function DeepMiningApp() {
     }
   }, []);
 
-  const totalGemsCount = Object.values(inventory).reduce((a, b) => a + b, 0);
+  const handleTeleportSurface = useCallback(() => {
+    // eslint-disable-next-line react-hooks/immutability
+    elevatorStateRef.current = "surface";
+    setLocationGuarded("Surface Mining Outpost");
+    setShowFactory(true);
+    const targetPos = new THREE.Vector3(0, 0, 100);
+    const groundY = surfaceSystemRef.current ? surfaceSystemRef.current.getGroundHeight(targetPos) : 0;
+    if (playerGroupRef.current) {
+      playerGroupRef.current.position.set(0, groundY, 100);
+    }
+    playerYawRef.current = 0;
+    cameraYawRef.current = 0;
+    if (worldRef.current) worldRef.current.elevatorGroup.position.z = 100;
+    soundManager.startMusic("surface");
+    soundManager.playCashRegister();
+  }, [setLocationGuarded]);
 
   return (
     <div className="w-full h-dvh relative overflow-hidden bg-slate-950 select-none">
       {/* 3D Canvas Container */}
-      <div ref={mountRef} className="w-full h-full" />
+      <div ref={mountRef} className="w-full h-full bg-[#0a0e14]" />
+
+      {/* Main Menu Layer */}
+      <MainMenu
+        isOpen={isMainMenuOpen}
+        onStartGame={handleStartNewGame}
+        onLoadGame={handleLoadGame}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
 
       {/* Mining HUD Overlay */}
-      <MiningHUD
-        cash={cash}
-        inventory={inventory}
-        jewelryInventory={jewelryInventory}
-        totalGemsCount={totalGemsCount}
-        backpackCapacity={backpackCapacity}
-        location={location}
-        depthFeet={depthFeet}
-        elevatorSpeed={upgrades.elevatorSpeed}
-        remainingCaveGems={remainingCaveGems}
-        upgrades={upgrades}
-        headlampOn={headlampOn}
-        headlampPower={headlampPower}
-        onToggleHeadlamp={handleToggleHeadlamp}
-        onCycleHeadlampPower={handleCycleHeadlampPower}
-        onUpgrade={handleUpgrade}
-        onSellGems={handleSellGems}
-        onSellJewelry={handleSellJewelry}
-        onCallElevator={() => {
-          if (nearElevator) {
-            const event = new KeyboardEvent("keydown", { key: "e" });
-            window.dispatchEvent(event);
-          }
-        }}
-        nearElevator={nearElevator}
-        nearTrader={nearTrader}
-        nearFactory={nearFactory}
-        nearJewelryShop={nearJewelryShop}
-        isAutoDrilling={isAutoDrilling}
-        clearScreenMode={clearScreenMode}
-        onToggleClearScreen={() => setClearScreenMode(!clearScreenMode)}
-        onDepositToFactory={handleDepositBackpackToFactory}
-        factoryNotification={factoryNotification}
-        onOpenOffice={() => setIsOfficeOpen(true)}
-        onOpenEncyclopedia={() => {
-          setFeaturedDiscoveredGem(null);
-          setIsEncyclopediaOpen(true);
-        }}
-        onOpenStatistics={() => setIsStatisticsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        nearOffice={nearOffice}
-        achievementToast={achievementToast}
-        onRotateCameraLeft={() => {
-          cameraYawRef.current += 0.35;
-        }}
-        onRotateCameraRight={() => {
-          cameraYawRef.current -= 0.35;
-        }}
-        onResetCamera={() => {
-          cameraYawRef.current = 0;
-          cameraPitchRef.current = 0.28;
-        }}
-        onZoomCameraIn={() => {
-          cameraDistanceRef.current = Math.max(3.8, cameraDistanceRef.current - 1.2);
-        }}
-        onZoomCameraOut={() => {
-          cameraDistanceRef.current = Math.min(18.0, cameraDistanceRef.current + 1.2);
-        }}
-      />
+      {gameState === "playing" && (
+        <MiningHUD
+          cash={cash}
+          inventory={inventory}
+          jewelryInventory={jewelryInventory}
+          totalGemsCount={totalGemsCount}
+          backpackCapacity={backpackCapacity}
+          location={location}
+          depthFeet={depthFeet}
+          elevatorSpeed={upgrades.elevatorSpeed}
+          remainingCaveGems={remainingCaveGems}
+          upgrades={upgrades}
+          headlampOn={headlampOn}
+          headlampPower={headlampPower}
+          onToggleHeadlamp={handleToggleHeadlamp}
+          onCycleHeadlampPower={handleCycleHeadlampPower}
+          onUpgrade={handleUpgrade}
+          onSellGems={handleSellGems}
+          onSellJewelry={handleSellJewelry}
+          onCallElevator={() => {
+            if (nearElevator) {
+              const event = new KeyboardEvent("keydown", { key: "e" });
+              window.dispatchEvent(event);
+            }
+          }}
+          nearElevator={nearElevator}
+          nearTrader={nearTrader}
+          nearFactory={nearFactory}
+          nearJewelryShop={nearJewelryShop}
+          isAutoDrilling={isAutoDrilling}
+          clearScreenMode={clearScreenMode}
+          onToggleClearScreen={() => setClearScreenMode(!clearScreenMode)}
+          onDepositToFactory={handleDepositBackpackToFactory}
+          factoryNotification={factoryNotification}
+          onOpenOffice={() => setIsOfficeOpen(true)}
+          onOpenEncyclopedia={() => {
+            setFeaturedDiscoveredGem(null);
+            setIsEncyclopediaOpen(true);
+          }}
+          onOpenStatistics={() => setIsStatisticsOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          nearOffice={nearOffice}
+          achievementToast={achievementToast}
+          onRotateCameraLeft={() => {
+            playerYawRef.current += 0.35;
+          }}
+          onRotateCameraRight={() => {
+            playerYawRef.current -= 0.35;
+          }}
+          onResetCamera={() => {
+            cameraYawRef.current = playerYawRef.current;
+            cameraPitchRef.current = 0.28;
+          }}
+          onZoomCameraIn={() => {
+            cameraDistanceRef.current = Math.max(4.0, cameraDistanceRef.current - 1.2);
+          }}
+          onZoomCameraOut={() => {
+            cameraDistanceRef.current = Math.min(16.0, cameraDistanceRef.current + 1.2);
+          }}
+          onPause={() => setIsPaused(true)}
+        />
+      )}
+      
+      {/* Teleport Button (Middle Bottom) */}
+      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
+          <button
+            onClick={handleTeleportSurface}
+            className="px-6 py-3 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 text-white font-black text-sm border border-cyan-400 shadow-[0_4px_20px_rgba(37,99,235,0.4)] transition-all active:scale-95 flex items-center gap-2"
+          >
+            <span>🚀</span> SURFACE
+          </button>
+        </div>
+      )}
+
+      {/* Joystick Overlay with Mobile Quick-Turn Buttons (Bottom Left) */}
+      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+        <div className="fixed bottom-8 left-8 z-50 pointer-events-auto flex items-end gap-3">
+          <Joystick 
+            onMove={(x, y) => {
+              if ((window as any).setJoyInput) {
+                (window as any).setJoyInput(x, y);
+              }
+            }} 
+          />
+          {/* Quick Turn Controls for Mobile Touch */}
+          <div className="flex flex-col gap-2 mb-2">
+            <button
+              onPointerDown={() => { turnButtonsRef.current.left = true; }}
+              onPointerUp={() => { turnButtonsRef.current.left = false; }}
+              onPointerLeave={() => { turnButtonsRef.current.left = false; }}
+              onPointerCancel={() => { turnButtonsRef.current.left = false; }}
+              className="w-11 h-11 rounded-xl bg-slate-900/90 border border-slate-700/80 active:bg-cyan-600 text-cyan-400 active:text-white font-black text-lg flex items-center justify-center shadow-xl active:scale-95 touch-none select-none backdrop-blur-md"
+              title="Turn Left (A)"
+              aria-label="Turn Left"
+            >
+              ↺
+            </button>
+            <button
+              onPointerDown={() => { turnButtonsRef.current.right = true; }}
+              onPointerUp={() => { turnButtonsRef.current.right = false; }}
+              onPointerLeave={() => { turnButtonsRef.current.right = false; }}
+              onPointerCancel={() => { turnButtonsRef.current.right = false; }}
+              className="w-11 h-11 rounded-xl bg-slate-900/90 border border-slate-700/80 active:bg-cyan-600 text-cyan-400 active:text-white font-black text-lg flex items-center justify-center shadow-xl active:scale-95 touch-none select-none backdrop-blur-md"
+              title="Turn Right (D)"
+              aria-label="Turn Right"
+            >
+              ↻
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Minimap Overlay (Top Right - Under HUD) */}
+      {gameState === "playing" && !clearScreenMode && isEngineReady && (
+        <div className="fixed top-24 right-8 z-50 pointer-events-auto">
+          <Minimap 
+            playerPos={minimapPlayerPos}
+            elevatorPos={{ x: 0, z: (location.includes("Mine") ? 2 : 100) }}
+            factoryPos={{ x: 0, z: 105 }}
+            worldState={location.includes("Mine") ? 'mine' : 'surface'}
+            playerYaw={minimapPlayerYaw}
+          />
+        </div>
+      )}
 
       {/* Corporate Executive Management Headquarters Modal */}
       <ManagementModal
@@ -1811,7 +1950,7 @@ export default function DeepMiningApp() {
         cash={cash}
         onCashChange={(newCash) => {
           setCash(newCash);
-          cashRef.current = newCash;
+          sharedStateRef.current.set('cash', newCash);
         }}
         onWorkersUpdated={() => {
           if (workerRendererRef.current) {
@@ -1863,12 +2002,26 @@ export default function DeepMiningApp() {
 
       {/* Professional Loading Screen */}
       <LoadingScreen
-        isLoading={isLoadingScreen}
+        isLoading={gameState === "loading" && isLoadingScreen}
         isEngineReady={isEngineReady}
-        onEnterGame={() => setIsLoadingScreen(false)}
+        onEnterGame={() => {
+          setIsLoadingScreen(false);
+          setGameState("playing");
+        }}
       />
 
+      <PauseMenu
+        isOpen={isPaused}
+        onClose={() => setIsPaused(false)}
+        onSave={handleSaveGame}
+        onExit={() => {
+          setIsPaused(false);
+          setGameState("menu");
+          setIsMainMenuOpen(true);
+        }}
+      />
       {showDiagnostics && <AudioDiagnostics />}
     </div>
+
   );
 }

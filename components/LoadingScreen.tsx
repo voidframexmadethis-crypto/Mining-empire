@@ -81,16 +81,16 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
         }
 
         // Advance smoothly towards 100%
-        let increment = 2;
-        if (prev < 30) increment = 3;
-        else if (prev < 70) increment = 2;
-        else if (prev < 90) increment = 1.5;
-        else increment = isEngineReady ? 2.5 : 0.5;
+        let increment = 8; // Faster initial loading
+        if (prev < 40) increment = 12;
+        else if (prev < 80) increment = 8;
+        else if (prev < 95) increment = 5;
+        else increment = isEngineReady ? 10 : 1.0;
 
         const next = Math.min(100, Math.round(prev + increment));
         return next;
       });
-    }, 45);
+    }, 20); // Faster interval
 
     // Tip rotation
     const tipInterval = setInterval(() => {
@@ -104,19 +104,19 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
     };
   }, [isLoading, isEngineReady]);
 
-  // When progress hits 100%, queue an automatic gentle launch after 1.5s if player doesn't click
+  // When progress hits 100%, queue an automatic gentle launch after 0.3s if player doesn't click
   useEffect(() => {
-    if (progress >= 100 && !isExiting) {
+    if (progress >= 100 && !isExiting && isEngineReady) {
       autoLaunchTimeoutRef.current = setTimeout(() => {
         handleLaunch();
-      }, 1800);
+      }, 0);
     }
     return () => {
       if (autoLaunchTimeoutRef.current) {
         clearTimeout(autoLaunchTimeoutRef.current);
       }
     };
-  }, [progress, isExiting, handleLaunch]);
+  }, [progress, isExiting, isEngineReady, handleLaunch]);
 
   // Support Space or Enter key to immediately launch once 100% is reached
   useEffect(() => {
@@ -217,8 +217,12 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
           {/* 3. BOTTOM INTERACTIVE PROGRESS HUD & LAUNCH CONTROLS           */}
           {/* Seamlessly integrates over the concept art loading bar region  */}
           {/* ============================================================== */}
-          <footer className="relative z-10 w-full px-3 sm:px-6 pb-4 sm:pb-8 flex flex-col items-center">
-            <div className="w-full max-w-2xl bg-black/85 backdrop-blur-xl border-2 border-amber-500/60 rounded-2xl p-4 sm:p-6 shadow-[0_12px_45px_rgba(0,0,0,0.9)] flex flex-col gap-3.5 relative overflow-hidden">
+          {/* ============================================================== */}
+          {/* 3. BOTTOM INTERACTIVE PROGRESS HUD & LAUNCH CONTROLS           */}
+          {/* Seamlessly integrates over the concept art loading bar region  */}
+          {/* ============================================================== */}
+          <footer className="relative z-10 w-full px-3 sm:px-6 pb-12 flex flex-col items-center">
+            <div className="w-full max-w-md bg-black/85 backdrop-blur-xl border-2 border-amber-500/60 rounded-2xl p-6 shadow-[0_12px_45px_rgba(0,0,0,0.9)] flex flex-col gap-4 relative overflow-hidden">
               {/* Outer Golden Corner Highlights */}
               <div className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-amber-400" />
               <div className="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-amber-400" />
@@ -226,28 +230,26 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
               <div className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-amber-400" />
 
               {/* Status Header: Stage text & Dynamic Percentage */}
-              <div className="flex items-center justify-between text-xs sm:text-sm font-semibold tracking-wide text-stone-300">
+              <div className="flex items-center justify-between text-sm font-semibold tracking-wide text-stone-300">
                 <div className="flex items-center gap-2 text-amber-300 truncate pr-2">
                   <Cog className={`w-4 h-4 text-amber-400 shrink-0 ${progress < 100 ? "animate-spin" : ""}`} />
                   <span className="truncate">{currentStageText}</span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-stone-400 font-mono text-xs hidden sm:inline">PROGRESS:</span>
-                  <span className="font-mono font-black text-amber-400 text-sm sm:text-base tracking-wider drop-shadow-[0_0_8px_rgba(245,158,11,0.5)]">
+                  <span className="font-mono font-black text-amber-400 text-base tracking-wider drop-shadow-[0_0_8px_rgba(245,158,11,0.5)]">
                     {progress}%
                   </span>
                 </div>
               </div>
 
               {/* Industrial Beveled Progress Bar Track */}
-              <div className="w-full h-5 sm:h-6 rounded-full bg-stone-950 p-1 border border-amber-500/40 shadow-inner relative overflow-hidden flex items-center">
+              <div className="w-full h-6 rounded-full bg-stone-950 p-1 border border-amber-500/40 shadow-inner relative overflow-hidden flex items-center">
                 {/* Dynamic Amber/Gold Energy Fill */}
                 <motion.div
                   className="h-full rounded-full bg-gradient-to-r from-amber-600 via-amber-400 to-yellow-300 shadow-[0_0_16px_rgba(245,158,11,0.7)] relative overflow-hidden"
                   style={{ width: `${Math.max(3, progress)}%` }}
                   transition={{ ease: "easeOut", duration: 0.15 }}
                 >
-                  {/* Sheen animation across fill */}
                   <motion.div
                     animate={{ x: ["-100%", "200%"] }}
                     transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
@@ -257,31 +259,14 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
 
                 {/* Centered textual percentage overlay */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="text-[11px] sm:text-xs font-mono font-black tracking-widest text-stone-950/90 drop-shadow-sm select-none">
+                  <span className="text-xs font-mono font-black tracking-widest text-stone-950/90 drop-shadow-sm select-none">
                     {progress < 100 ? `LOADING... ${progress}%` : "SYSTEMS OPERATIONAL"}
                   </span>
                 </div>
               </div>
 
-              {/* Dynamic Tip Carousel */}
-              <div className="min-h-[38px] sm:min-h-[42px] flex items-center justify-center px-2 py-1 bg-stone-950/70 border border-stone-800/80 rounded-xl">
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={tipIndex}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.3 }}
-                    className="flex items-center gap-2 text-center text-xs sm:text-[13px] text-amber-200/90 font-medium"
-                  >
-                    <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span>{GAMEPLAY_TIPS[tipIndex]}</span>
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-
               {/* Action / Enter Button */}
-              <div className="pt-1">
+              <div className="pt-2">
                 {progress >= 100 ? (
                   <motion.button
                     initial={{ scale: 0.96, opacity: 0 }}
@@ -289,14 +274,14 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleLaunch}
-                    className="w-full py-3 sm:py-3.5 px-6 rounded-xl font-black text-sm sm:text-base tracking-wide bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-400 text-stone-950 shadow-[0_0_30px_rgba(245,158,11,0.6)] border border-yellow-200 cursor-pointer flex items-center justify-center gap-2.5 transition-all animate-pulse"
+                    className="w-full py-4 px-6 rounded-xl font-black text-base tracking-wide bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-400 text-stone-950 shadow-[0_0_30px_rgba(245,158,11,0.6)] border border-yellow-200 cursor-pointer flex items-center justify-center gap-2.5 transition-all animate-pulse"
                   >
                     <Pickaxe className="w-5 h-5 text-stone-950" />
                     <span>ENTER MINING EMPIRE</span>
                     <ChevronRight className="w-5 h-5 text-stone-950" />
                   </motion.button>
                 ) : (
-                  <div className="w-full py-2.5 px-4 rounded-xl bg-stone-900/60 border border-stone-800 text-stone-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-2">
+                  <div className="w-full py-3 px-4 rounded-xl bg-stone-900/60 border border-stone-800 text-stone-400 text-sm font-semibold flex items-center justify-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                     <span>Synchronizing underground cavern geometry...</span>
                   </div>
@@ -311,21 +296,13 @@ export default function LoadingScreen({ isLoading, onEnterGame, isEngineReady = 
                     className="text-[11px] text-amber-400/80 hover:text-amber-300 underline underline-offset-2 flex items-center justify-center gap-1 mx-auto cursor-pointer"
                   >
                     <AlertCircle className="w-3 h-3" />
-                    <span>Taking longer than expected? Click here to launch game immediately</span>
+                    <span>Launch game immediately</span>
                   </button>
                 </div>
               )}
             </div>
-
-            {/* Quick Keyboard Hint */}
-            <div className="mt-2 text-[10px] sm:text-xs text-stone-400/70 font-mono text-center">
-              {progress >= 100 ? (
-                <span>Press <kbd className="px-1.5 py-0.5 bg-stone-800 border border-stone-700 rounded text-amber-300 font-bold">ENTER</kbd> or click to begin your empire</span>
-              ) : (
-                <span>Official Mining Empire Simulation Engine • PC / Console / Web</span>
-              )}
-            </div>
           </footer>
+
         </motion.div>
       )}
     </AnimatePresence>
